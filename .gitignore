@@ -1,0 +1,13 @@
+# Ігноруємо змінні середовища (ПАРОЛІ!)
+.env
+
+# Ігноруємо дані бази даних Docker
+postgres_data/
+
+# Ігноруємо кеш Python
+__pycache__/
+*.pyc
+
+# Ігноруємо налаштування IDE (VS Code, PyCharm, DataGrip)
+.vscode/
+.idea/
