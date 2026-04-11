@@ -30,10 +30,10 @@ def connect_to_db():
         return None
 
 def parse_job_page(job_url):
-    """Заходить на сторінку вакансії, дістає опис, зарплату, компанію та місто"""
+    """Заходить на сторінку вакансії, дістає опис, зарплату, чисту компанію та місто"""
     response = requests.get(job_url, headers=headers)
     if response.status_code != 200:
-        return "", "", "", "" # Тепер повертаємо 4 значення
+        return "", "", "", ""
     
     soup = BeautifulSoup(response.text, 'html.parser')
     
@@ -41,35 +41,39 @@ def parse_job_page(job_url):
     description_div = soup.find('div', id='job-description')
     description = description_div.text.strip() if description_div else ""
     
-    # 2. Шукаємо зарплату
+# 2. Шукаємо зарплату (розширили пошук на b, span та h5)
     salary = ""
-    for tag in soup.find_all(['b', 'span']):
+    for tag in soup.find_all(['b', 'span', 'h5']):
         text = tag.text.strip()
-        if 'грн' in text or '$' in text or '€' in text:
-            if any(char.isdigit() for char in text):
+        if 'грн' in text or '₴' in text or '$' in text or '€' in text:
+            # Захист від сміття: текст має бути коротким і містити цифри
+            if len(text) < 40 and any(char.isdigit() for char in text):
                 salary = text
                 break
-
-    # 3. Шукаємо компанію (шукаємо посилання, що веде на профіль роботодавця)
+            
+    # 3. Шукаємо ЧИСТУ компанію
     company = ""
-    company_tag = soup.find('a', href=lambda href: href and '/employers/' in href)
-    if company_tag:
-        # Іноді там є картинка логотипу, тому використовуємо get_text(strip=True)
-        company = company_tag.get_text(strip=True)
+    company_icon = soup.find('span', class_='glyphicon-company')
+    if company_icon and company_icon.parent:
+        # Шукаємо посилання <a> або жирний текст <b> всередині цього блоку
+        name_tag = company_icon.parent.find(['a', 'b'])
+        if name_tag:
+            company = name_tag.text.strip()
+        else:
+            # Резервний варіант: беремо текст до крапки з комою або перенесення
+            raw_text = company_icon.parent.get_text(separator='|')
+            parts = raw_text.split('|')
+            company = parts[1].strip() if len(parts) > 1 else raw_text.strip()
 
-    # 4. Шукаємо місто (іноді воно лежить у класі 'text-muted' поруч із компанією)
-    # На Work.ua місто зазвичай йде після назви компанії або має іконку локації.
-    # Найпростіший спосіб для сторінки вакансії - знайти текст із популярними містами або "Дистанційно"
+    # 4. Шукаємо ЧИСТЕ місто
     location = ""
-    # Збираємо всі абзаци <p>, щоб знайти той, що описує локацію
-    for p_tag in soup.find_all('p'):
-        text = p_tag.get_text(strip=True)
-        # Шукаємо ключові слова для локації або перевіряємо, чи є місто у тексті
-        if 'Київ' in text or 'Львів' in text or 'Дистанційно' in text or 'Одеса' in text:
-            # Обмежуємо довжину, щоб не схопити цілий абзац опису
-            if len(text) < 50: 
-                location = text
-                break
+    location_icon = soup.find('span', class_='glyphicon-map-marker')
+    if location_icon and location_icon.parent:
+        raw_loc_text = location_icon.parent.get_text(separator='|')
+        # Беремо текст одразу після іконки
+        clean_loc = raw_loc_text.split('|')[1].strip() if len(raw_loc_text.split('|')) > 1 else raw_loc_text.strip()
+        # ТРЮК: Відсікаємо вулиці, залишаємо все, що до першої коми
+        location = clean_loc.split(',')[0].strip()
 
     return description, salary, company, location
 
