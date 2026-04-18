@@ -17,5 +17,6 @@ CREATE TABLE staging.raw_resumes (
     external_id VARCHAR(100),
     raw_text TEXT,
     raw_json JSONB,
-    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_name, external_id)
 );
