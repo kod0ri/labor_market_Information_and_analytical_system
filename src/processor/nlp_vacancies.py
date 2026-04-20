@@ -1,250 +1,226 @@
 import os
 import json
-import time
-from google import genai
-from google.genai import types
+import re
+import asyncio
+from pydantic import ValidationError
+from groq import AsyncGroq
 from dotenv import load_dotenv
 
-# Імпортуємо наш пул з'єднань
-from src.db.database import DatabasePool
+from src.db.database import AsyncDatabasePool
+from src.processor.schemas import VacancySchema
 
 load_dotenv()
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
-# Оновлений Промпт
 SYSTEM_INSTRUCTION = """
 Ти професійний IT-аналітик та Data Engineer. Твоє завдання: проаналізувати текст вакансії.
-Ти ПОВИНЕН повернути результат ВИКЛЮЧНО у форматі JSON за такою структурою:
+Поверни ВИКЛЮЧНО валідний JSON. ЗАБОРОНЕНО писати будь-який інший текст.
+
+СХЕМА JSON (суворо дотримуйся цих типів даних, якщо даних немає - пиши null):
 {
-    "skills": [
-        {"name": "Python", "category": "Hard"}, 
-        {"name": "Teamwork", "category": "Soft"}
-    ],
-    "experience_years": 2, // Досвід роботи в РОКАХ (число). Якщо вказано "від 1 року" -> 1. Якщо "Junior" -> 0. Якщо не зрозуміло - null.
-    "english_level": "Intermediate", // Рівень англійської (Beginner, Pre-Intermediate, Intermediate, Upper-Intermediate, Advanced, Fluent). Якщо не вказано - null.
+    "skills": [ {"name": "назва", "category": "Hard або Soft"} ],
+    "experience_years": 2, 
+    "english_level": "Intermediate", 
     "min_salary": 20000, 
     "max_salary": 40000, 
-    "currency": "UAH", // UAH, USD, EUR
+    "currency": "UAH", 
     "company_industry": "IT", 
     "website_url": "https://example.com", 
     "region": "Київська область" 
 }
+УВАГА: skills - це ЗАВЖДИ масив об'єктів (або порожній масив []), min_salary та max_salary - це ЗАВЖДИ цілі числа (не рядки).
 """
 
 
-def clean_json_response(text):
-    """Очищає відповідь LLM від Markdown-обгорток"""
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
+def prepare_text_for_llm(raw_text: str | None) -> str:
+    if not raw_text:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", raw_text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:1500]
 
 
-def get_or_create_company(cursor, company_name_val, industry, website):
-    if not company_name_val:
+async def get_or_create_company(conn, name, industry, website, cache):
+    if not name:
         return None
-    cursor.execute(
-        """
-        INSERT INTO dictionaries.companies (name, industry, website_url) 
-        VALUES (%s, %s, %s) 
-        ON CONFLICT (name) DO UPDATE 
-        SET industry = COALESCE(dictionaries.companies.industry, EXCLUDED.industry),
-            website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url)
-        RETURNING id;
-    """,
-        (company_name_val, industry, website),
-    )
-    result = cursor.fetchone()
-    if result:
-        return result[0]
-    cursor.execute(
-        "SELECT id FROM dictionaries.companies WHERE name = %s;", (company_name_val,)
-    )
-    result = cursor.fetchone()
-    return result[0] if result else None
+    name = name[:200]
+    if name in cache["companies"]:
+        return cache["companies"][name]
+    query = """
+        INSERT INTO dictionaries.companies (name, industry, website_url) VALUES ($1, $2, $3) 
+        ON CONFLICT (name) DO UPDATE SET industry = COALESCE(dictionaries.companies.industry, EXCLUDED.industry), website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url) RETURNING id;
+    """
+    comp_id = await conn.fetchval(query, name, industry, website)
+    if not comp_id:
+        comp_id = await conn.fetchval(
+            "SELECT id FROM dictionaries.companies WHERE name = $1;", name
+        )
+    cache["companies"][name] = comp_id
+    return comp_id
 
 
-def get_or_create_location(cursor, city_name, region):
+async def get_or_create_location(conn, city_name, region, cache):
     if not city_name:
         return None
-    cursor.execute(
-        "SELECT id FROM dictionaries.locations WHERE city_name = %s LIMIT 1;",
-        (city_name,),
+    city_name = city_name[:99]
+    if city_name in cache["locations"]:
+        return cache["locations"][city_name]
+    loc_id = await conn.fetchval(
+        "SELECT id FROM dictionaries.locations WHERE city_name = $1 LIMIT 1;", city_name
     )
-    result = cursor.fetchone()
-    if result:
-        return result[0]
-
-    cursor.execute(
-        """
-        INSERT INTO dictionaries.locations (city_name, region) 
-        VALUES (%s, %s) RETURNING id;
-    """,
-        (city_name, region),
-    )
-    result = cursor.fetchone()
-    return result[0] if result else None
+    if not loc_id:
+        loc_id = await conn.fetchval(
+            "INSERT INTO dictionaries.locations (city_name, region) VALUES ($1, $2) RETURNING id;",
+            city_name,
+            region,
+        )
+    cache["locations"][city_name] = loc_id
+    return loc_id
 
 
-def get_or_create_skill(cursor, skill_name_val, category):
-    if not skill_name_val:
+async def get_or_create_skill(conn, name, category, cache):
+    if not name:
         return None
-    cursor.execute(
-        """
-        INSERT INTO dictionaries.skills (name, category) 
-        VALUES (%s, %s) ON CONFLICT (name) DO NOTHING;
-    """,
-        (skill_name_val, category),
+    name = name[:99]
+    if name in cache["skills"]:
+        return cache["skills"][name]
+    skill_id = await conn.fetchval(
+        "INSERT INTO dictionaries.skills (name, category) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING RETURNING id;",
+        name,
+        category,
     )
-    cursor.execute(
-        "SELECT id FROM dictionaries.skills WHERE name = %s;", (skill_name_val,)
-    )
-    result = cursor.fetchone()
-    return result[0] if result else None
+    if not skill_id:
+        skill_id = await conn.fetchval(
+            "SELECT id FROM dictionaries.skills WHERE name = $1;", name
+        )
+    cache["skills"][name] = skill_id
+    return skill_id
 
 
-def process_vacancies():
-    DatabasePool.initialize()
+async def process_single_vacancy(record, cache, semaphore):
+    staging_id = record["id"]
+    raw_html = record["raw_html"]
+    raw_json = record["raw_json"]
 
-    with DatabasePool.get_connection() as conn:
-        with conn.cursor() as cursor:
-            # Вибираємо до 100 нових вакансій
-            cursor.execute("""
-                SELECT s.id, s.external_id, s.raw_html, s.raw_json 
-                FROM staging.raw_vacancies s
-                LEFT JOIN core.vacancies c ON s.id = c.staging_id
-                WHERE s.raw_html IS NOT NULL AND s.raw_html != '' AND c.id IS NULL
-                LIMIT 100;
-            """)
-            vacancies = cursor.fetchall()
+    if isinstance(raw_json, str):
+        raw_json = json.loads(raw_json)
+    if not raw_json:
+        raw_json = {}
 
-            if not vacancies:
-                print("⚠️ Немає нових вакансій для обробки.")
-                return
+    title = raw_json.get("title", "Невідома посада")
+    company_name = raw_json.get("company", "")
+    location_name = raw_json.get("location", "")
+    raw_salary = raw_json.get("salary", "")
 
-            print(f"🚀 Починаємо обробку {len(vacancies)} вакансій...\n")
+    safe_text = prepare_text_for_llm(raw_html)
+    prompt = f"Текст вакансії:\n{safe_text}\n\nВказана зарплата: {raw_salary}"
 
-            for staging_id, external_id, raw_html, raw_json in vacancies:
-                title = raw_json.get("title", "Невідома посада")
-                company_name = raw_json.get("company", "")
-                location_name = raw_json.get("location", "")
-                raw_salary = raw_json.get("salary", "")
+    async with semaphore:
+        for attempt in range(3):
+            try:
+                chat_completion = await client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model="llama-3.1-8b-instant",
+                    temperature=0,  # Повний нуль для мінімізації галюцинацій
+                    response_format={"type": "json_object"},
+                )
 
-                print(f"Обробляємо: [{staging_id}] {title}")
+                response_text = chat_completion.choices[0].message.content
+                if not response_text:
+                    raise ValueError("Отримано порожню відповідь від LLM")
 
-                max_retries = 5
-                for attempt in range(max_retries):
-                    try:
-                        prompt = f"Текст вакансії:\n{raw_html}\n\nВказана зарплата: {raw_salary}"
-                        response = client.models.generate_content(
-                            model="gemini-2.5-flash-lite",
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                system_instruction=SYSTEM_INSTRUCTION,
-                                response_mime_type="application/json",
-                                temperature=0.1,
-                            ),
+                md_ticks = "`" * 3
+                response_text = (
+                    response_text.strip()
+                    .removeprefix(md_ticks + "json")
+                    .removeprefix(md_ticks)
+                    .removesuffix(md_ticks)
+                    .strip()
+                )
+
+                ai_data = VacancySchema.model_validate_json(response_text)
+
+                async with AsyncDatabasePool.get_connection() as conn:
+                    async with conn.transaction():
+                        comp_id = await get_or_create_company(
+                            conn,
+                            company_name,
+                            ai_data.company_industry,
+                            ai_data.website_url,
+                            cache,
+                        )
+                        loc_id = await get_or_create_location(
+                            conn, location_name, ai_data.region, cache
                         )
 
-                        clean_text = clean_json_response(response.text)
-                        ai_data = json.loads(clean_text)
-
-                        comp_name = str(company_name)[:200] if company_name else None
-                        loc_name = str(location_name)[:99] if location_name else None
-
-                        comp_id = get_or_create_company(
-                            cursor,
-                            comp_name,
-                            ai_data.get("company_industry"),
-                            ai_data.get("website_url"),
-                        )
-                        loc_id = get_or_create_location(
-                            cursor, loc_name, ai_data.get("region")
+                        new_vacancy_id = await conn.fetchval(
+                            "INSERT INTO core.vacancies (staging_id, title, company_id, location_id, min_salary, max_salary, currency, experience_years, english_level) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id;",
+                            staging_id,
+                            str(title)[:200],
+                            comp_id,
+                            loc_id,
+                            ai_data.min_salary,
+                            ai_data.max_salary,
+                            ai_data.currency,
+                            ai_data.experience_years,
+                            ai_data.english_level,
                         )
 
-                        cursor.execute(
-                            """
-                            INSERT INTO core.vacancies 
-                            (staging_id, title, company_id, location_id, min_salary, max_salary, currency, experience_years, english_level)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            RETURNING id;
-                        """,
-                            (
-                                staging_id,
-                                str(title)[
-                                    :200
-                                ],  # Захист від занадто довгих заголовків
-                                comp_id,
-                                loc_id,
-                                ai_data.get("min_salary"),
-                                ai_data.get("max_salary"),
-                                ai_data.get("currency"),
-                                ai_data.get("experience_years"),
-                                ai_data.get("english_level"),
-                            ),
-                        )
-                        new_vacancy_id = cursor.fetchone()[0]
-
-                        skills = ai_data.get("skills", [])
-                        for skill_obj in skills:
-                            if isinstance(skill_obj, dict):
-                                skill_name = str(skill_obj.get("name", ""))[
-                                    :99
-                                ]  # ОБРІЗАЄМО ДО 100 СИМВОЛІВ
-                                skill_category = str(skill_obj.get("category", "Hard"))[
-                                    :49
-                                ]
-                            else:
-                                skill_name = str(skill_obj)[:99]
-                                skill_category = "Hard"
-
-                            if skill_name:
-                                skill_id = get_or_create_skill(
-                                    cursor, skill_name, skill_category
+                        for skill in ai_data.skills:
+                            skill_id = await get_or_create_skill(
+                                conn, skill.name, skill.category, cache
+                            )
+                            if skill_id:
+                                await conn.execute(
+                                    "INSERT INTO core.vacancy_skills (vacancy_id, skill_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;",
+                                    new_vacancy_id,
+                                    skill_id,
                                 )
-                                if skill_id:
-                                    cursor.execute(
-                                        """
-                                        INSERT INTO core.vacancy_skills (vacancy_id, skill_id)
-                                        VALUES (%s, %s) ON CONFLICT DO NOTHING;
-                                    """,
-                                        (new_vacancy_id, skill_id),
-                                    )
 
-                        conn.commit()
-                        print("   💾 Успішно! Збережено у БД\n")
-                        time.sleep(15)
-                        break
+                print(f"   💾 Успішно: [ID {staging_id}] {title[:30]}...")
+                await asyncio.sleep(1)
+                return True
 
-                    except Exception as e:
-                        conn.rollback()  # <--- КРИТИЧНО ВАЖЛИВО! ВІДКАТ ЗЛАМАНОЇ ТРАНЗАКЦІЇ
-                        error_msg = str(e)
-                        print(f"   🔥 ДЕТАЛІ ПОМИЛКИ: {error_msg}")
+            except ValidationError as ve:
+                # ВИТЯГУЄМО ТОЧНУ ПРИЧИНУ ПОМИЛКИ
+                failed_fields = [str(err.get("loc", [""])[0]) for err in ve.errors()]
+                print(
+                    f"   ⚠️ Галюцинація LLM (спроба {attempt + 1}). Зламались поля: {failed_fields}"
+                )
+                await asyncio.sleep(2)
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg or "rate" in error_msg.lower():
+                    await asyncio.sleep(10 * (attempt + 1))
+                else:
+                    print(f"   ❌ Помилка: {error_msg}")
+                    break
+        return False
 
-                        if (
-                            "429" in error_msg
-                            or "503" in error_msg
-                            or "quota" in error_msg.lower()
-                            or "UNAVAILABLE" in error_msg
-                        ):
-                            if attempt < max_retries - 1:
-                                wait_time = 30 * (attempt + 1)
-                                print(
-                                    f"   ⚠️ Ліміт API. Охолоджуємо сервер {wait_time} секунд..."
-                                )
-                                time.sleep(wait_time)
-                            else:
-                                print(
-                                    "   ❌ Ліміт спроб вичерпано. Пропускаємо запис.\n"
-                                )
-                        else:
-                            print("   ❌ Непередбачена помилка БД/Коду. Йдемо далі.\n")
-                            break
+
+async def main():
+    await AsyncDatabasePool.initialize()
+    cache = {"companies": {}, "locations": {}, "skills": {}}
+    semaphore = asyncio.Semaphore(10)
+
+    async with AsyncDatabasePool.get_connection() as conn:
+        records = await conn.fetch(
+            "SELECT s.id, s.external_id, s.raw_html, s.raw_json FROM staging.raw_vacancies s LEFT JOIN core.vacancies c ON s.id = c.staging_id WHERE s.raw_html IS NOT NULL AND s.raw_html != '' AND c.id IS NULL LIMIT 100;"
+        )
+
+    if not records:
+        print("⚠️ Немає нових вакансій для обробки.")
+        #await AsyncDatabasePool.close_all()
+        return
+
+    print(f"🚀 Старт ASYNC обробки {len(records)} вакансій (Groq + Pydantic)...")
+    tasks = [process_single_vacancy(record, cache, semaphore) for record in records]
+    await asyncio.gather(*tasks)
+    #await AsyncDatabasePool.close_all()
 
 
 if __name__ == "__main__":
-    process_vacancies()
+    asyncio.run(main())

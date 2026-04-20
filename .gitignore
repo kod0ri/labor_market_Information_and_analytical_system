@@ -3,6 +3,7 @@
 
 # Ігноруємо дані бази даних Docker
 postgres_data/
+database_dump.sql
 
 # Ігноруємо кеш Python
 __pycache__/

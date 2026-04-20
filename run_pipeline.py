@@ -1,51 +1,71 @@
-import subprocess
-import logging
-import sys
+import asyncio
+from prefect import flow, task
+from prefect.logging import get_run_logger
 
-# Налаштування логування
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+from src.scrapers import workua_vacancies, workua_resumes
+from src.processor import nlp_vacancies, nlp_resumes, currency_converter
+from src.db.database import AsyncDatabasePool  # <--- Імпортуємо пул
 
+@task(name="Scrape Vacancies", retries=2, retry_delay_seconds=10)
+async def task_scrape_vacancies():
+    logger = get_run_logger()
+    logger.info("Починаємо збір вакансій...")
+    await workua_vacancies.main()
 
-def run_script(module_name: str) -> None:
-    """Запускає вказаний Python-модуль у вигляді окремого процесу."""
-    logger.info(f"▶️ ПОЧАТОК ЕТАПУ: {module_name}...")
+@task(name="Scrape Resumes", retries=2, retry_delay_seconds=10)
+async def task_scrape_resumes():
+    logger = get_run_logger()
+    logger.info("Починаємо збір резюме...")
+    await workua_resumes.main()
+
+@task(name="NLP Process Vacancies", retries=1)
+async def task_nlp_vacancies():
+    logger = get_run_logger()
+    logger.info("Запуск NLP обробки вакансій (Groq)...")
+    await nlp_vacancies.main()
+
+@task(name="NLP Process Resumes", retries=1)
+async def task_nlp_resumes():
+    logger = get_run_logger()
+    logger.info("Запуск NLP обробки резюме (Groq)...")
+    await nlp_resumes.main()
+
+@task(name="Convert Currencies")
+async def task_convert_currencies():
+    logger = get_run_logger()
+    logger.info("Нормалізація зарплат у USD...")
+    await currency_converter.run_conversion() 
+
+@flow(name="Labor Market ETL Pipeline")
+async def main_pipeline():
+    logger = get_run_logger()
+    logger.info("🚀 Старт ETL пайплайну!")
+
     try:
-        # sys.executable гарантує, що ми використовуємо той самий віртуальний інтерпретатор,
-        # з якого запущено цей runner. Прапорець -m вирішує проблеми з PYTHONPATH.
-        subprocess.run([sys.executable, "-m", module_name], check=True)
-        logger.info(f"✅ ЕТАП {module_name} ЗАВЕРШЕНО УСПІШНО.\n" + "-" * 50)
-    except subprocess.CalledProcessError as e:
-        logger.error(
-            f"❌ КРИТИЧНА ПОМИЛКА: Етап {module_name} завершився з кодом {e.returncode}. Зупинка пайплайну."
+        # ЕТАП 1: Скрейпінг (працюють паралельно)
+        logger.info("--- Етап 1: Збір даних ---")
+        await asyncio.gather(
+            task_scrape_vacancies(), # type: ignore
+            task_scrape_resumes()    # type: ignore
         )
-        sys.exit(1)  # Зупиняємо весь пайплайн, якщо один з кроків впав
-    except KeyboardInterrupt:
-        logger.warning("\n⚠️ Виконання примусово зупинено користувачем.")
-        sys.exit(0)
 
+        # ЕТАП 2: NLP Обробка
+        logger.info("--- Етап 2: NLP обробка ---")
+        await asyncio.gather(
+            task_nlp_vacancies(),    # type: ignore
+            task_nlp_resumes()       # type: ignore
+        )
 
-def main():
-    logger.info("🚀 СТАРТ ПОВНОГО ПАЙПЛАЙНУ ЗБОРУ ТА ОБРОБКИ ДАНИХ 🚀\n" + "=" * 50)
+        # ЕТАП 3: Нормалізація валют
+        logger.info("--- Етап 3: Конвертація валют ---")
+        await task_convert_currencies()  # type: ignore 
 
-    # === ЕТАП 1: СКРЕЙПІНГ (Наповнення Staging) ===
-    # Спочатку збираємо сирі дані з сайтів.
-    run_script("src.scrapers.workua_vacancies")
-    run_script("src.scrapers.workua_resumes")
-
-    # === ЕТАП 2: NLP ОБРОБКА (Наповнення Core) ===
-    # Передаємо сирі дані в Gemini для структуризації.
-    run_script("src.processor.nlp_vacancies")
-    run_script("src.processor.nlp_resumes")
-
-    # === ЕТАП 3: КОНВЕРТАЦІЯ ВАЛЮТ (Зарезервовано) ===
-    # Тут буде скрипт для приведення зарплат до єдиного знаменника в USD
-    # run_script("src.processor.currency_converter")
-
-    logger.info("🎉 ВЕСЬ ПАЙПЛАЙН УСПІШНО ВИКОНАНО! Дані готові для аналітики.")
-
+        logger.info("✅ Пайплайн успішно завершив роботу!")
+        
+    finally:
+        # ЗАВЖДИ закриваємо пул в кінці, незалежно від помилок
+        await AsyncDatabasePool.close_all()
+        logger.info("🔒 Підключення до бази даних безпечно закрито.")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_pipeline())
