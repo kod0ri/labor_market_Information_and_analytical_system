@@ -1,16 +1,19 @@
 import asyncio
-from prefect import flow, task
-from prefect.logging import get_run_logger
+from prefect import flow, task, get_run_logger
 
+from src.db.database import AsyncDatabasePool
 from src.scrapers import workua_vacancies, workua_resumes
 from src.processor import nlp_vacancies, nlp_resumes, currency_converter
-from src.db.database import AsyncDatabasePool  # <--- Імпортуємо пул
 
+
+# --- Визначення тасок (Tasks) ---
+# retries=2 гарантує, що якщо мережа впаде під час скрейпінгу, Prefect автоматично спробує ще раз
 @task(name="Scrape Vacancies", retries=2, retry_delay_seconds=10)
 async def task_scrape_vacancies():
     logger = get_run_logger()
     logger.info("Починаємо збір вакансій...")
     await workua_vacancies.main()
+
 
 @task(name="Scrape Resumes", retries=2, retry_delay_seconds=10)
 async def task_scrape_resumes():
@@ -18,54 +21,60 @@ async def task_scrape_resumes():
     logger.info("Починаємо збір резюме...")
     await workua_resumes.main()
 
-@task(name="NLP Process Vacancies", retries=1)
+
+@task(name="NLP Process Vacancies")
 async def task_nlp_vacancies():
     logger = get_run_logger()
     logger.info("Запуск NLP обробки вакансій (Groq)...")
     await nlp_vacancies.main()
 
-@task(name="NLP Process Resumes", retries=1)
+
+@task(name="NLP Process Resumes")
 async def task_nlp_resumes():
     logger = get_run_logger()
     logger.info("Запуск NLP обробки резюме (Groq)...")
     await nlp_resumes.main()
 
+
 @task(name="Convert Currencies")
 async def task_convert_currencies():
     logger = get_run_logger()
     logger.info("Нормалізація зарплат у USD...")
-    await currency_converter.run_conversion() 
+    await currency_converter.run_conversion()
 
-@flow(name="Labor Market ETL Pipeline")
-async def main_pipeline():
+# --- Головний пайплайн (Flow) ---
+@flow(name="Labor Market ETL Pipeline", log_prints=True)
+async def etl_flow():
     logger = get_run_logger()
     logger.info("🚀 Старт ETL пайплайну!")
 
     try:
-        # ЕТАП 1: Скрейпінг (працюють паралельно)
+        # 1. Єдина точка ініціалізації бази даних
+        await AsyncDatabasePool.initialize()
+
+        # 2. Етап 1: Збір даних (Виконується паралельно)
         logger.info("--- Етап 1: Збір даних ---")
-        await asyncio.gather(
-            task_scrape_vacancies(), # type: ignore
-            task_scrape_resumes()    # type: ignore
-        )
+        await asyncio.gather(task_scrape_vacancies(), task_scrape_resumes())
 
-        # ЕТАП 2: NLP Обробка
+        # 3. Етап 2: NLP обробка (Виконується паралельно, АЛЕ тільки після Етапу 1)
         logger.info("--- Етап 2: NLP обробка ---")
-        await asyncio.gather(
-            task_nlp_vacancies(),    # type: ignore
-            task_nlp_resumes()       # type: ignore
-        )
+        await asyncio.gather(task_nlp_vacancies(), task_nlp_resumes())
 
-        # ЕТАП 3: Нормалізація валют
+        # 4. Етап 3: Конвертація (Синхронний фінальний крок)
         logger.info("--- Етап 3: Конвертація валют ---")
-        await task_convert_currencies()  # type: ignore 
+        await task_convert_currencies()
 
         logger.info("✅ Пайплайн успішно завершив роботу!")
-        
+
+    except Exception as e:
+        logger.error(f"❌ Критична помилка в пайплайні: {e}")
+        raise  # Прокидаємо помилку далі, щоб Prefect позначив Flow як Failed
     finally:
-        # ЗАВЖДИ закриваємо пул в кінці, незалежно від помилок
+        # 5. Гарантоване закриття пулу з'єднань, навіть якщо сталася помилка
         await AsyncDatabasePool.close_all()
         logger.info("🔒 Підключення до бази даних безпечно закрито.")
 
+
 if __name__ == "__main__":
-    asyncio.run(main_pipeline())
+    # Запуск асинхронного флоу
+    asyncio.run(etl_flow())

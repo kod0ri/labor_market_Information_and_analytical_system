@@ -12,6 +12,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init_db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   pgadmin:
     image: dpage/pgadmin4
@@ -24,6 +29,19 @@ services:
       - "5050:80"
     depends_on:
       - db
+
+  etl_worker:
+    build: .
+    container_name: etl_pipeline_worker
+    restart: on-failure
+    env_file:
+      - .env
+    environment:
+      # Перевизначаємо DB_HOST для роботи всередині Docker-мережі
+      DB_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:

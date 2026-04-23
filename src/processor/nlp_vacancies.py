@@ -2,6 +2,7 @@ import os
 import json
 import re
 import asyncio
+from bs4 import BeautifulSoup
 from pydantic import ValidationError
 from groq import AsyncGroq
 from dotenv import load_dotenv
@@ -18,7 +19,9 @@ SYSTEM_INSTRUCTION = """
 
 СХЕМА JSON (суворо дотримуйся цих типів даних, якщо даних немає - пиши null):
 {
-    "skills": [ {"name": "назва", "category": "Hard або Soft"} ],
+    "company_name": "Назва компанії",
+    "location_name": "Київ",
+    "skills": [ {"name": "Python", "category": "Hard"} ],
     "experience_years": 2, 
     "english_level": "Intermediate", 
     "min_salary": 20000, 
@@ -28,84 +31,95 @@ SYSTEM_INSTRUCTION = """
     "website_url": "https://example.com", 
     "region": "Київська область" 
 }
-УВАГА: skills - це ЗАВЖДИ масив об'єктів (або порожній масив []), min_salary та max_salary - це ЗАВЖДИ цілі числа (не рядки).
+УВАГА: skills - це ЗАВЖДИ масив об'єктів (БЕЗ вказання досвіду для кожної навички, тільки name та category), min_salary та max_salary - це ЗАВЖДИ цілі числа (не рядки).
 """
 
 
 def prepare_text_for_llm(raw_text: str | None) -> str:
     if not raw_text:
         return ""
-    text = re.sub(r"<[^>]+>", " ", raw_text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = BeautifulSoup(raw_text, "html.parser").get_text(separator=" ", strip=True)
     return text[:1500]
 
 
-async def get_or_create_company(conn, name, industry, website, cache):
+async def get_or_create_company(conn, name, industry, website, cache, cache_lock):
     if not name:
         return None
     name = name[:200]
-    if name in cache["companies"]:
-        return cache["companies"][name]
-    query = """
-        INSERT INTO dictionaries.companies (name, industry, website_url) VALUES ($1, $2, $3) 
-        ON CONFLICT (name) DO UPDATE SET industry = COALESCE(dictionaries.companies.industry, EXCLUDED.industry), website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url) RETURNING id;
-    """
-    comp_id = await conn.fetchval(query, name, industry, website)
-    if not comp_id:
-        comp_id = await conn.fetchval(
-            "SELECT id FROM dictionaries.companies WHERE name = $1;", name
-        )
-    cache["companies"][name] = comp_id
-    return comp_id
+
+    async with cache_lock:
+        if name in cache["companies"]:
+            return cache["companies"][name]
+
+        query = """
+            INSERT INTO dictionaries.companies (name, industry, website_url) VALUES ($1, $2, $3) 
+            ON CONFLICT (name) DO UPDATE SET industry = COALESCE(dictionaries.companies.industry, EXCLUDED.industry), website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url) RETURNING id;
+        """
+        comp_id = await conn.fetchval(query, name, industry, website)
+        if not comp_id:
+            comp_id = await conn.fetchval(
+                "SELECT id FROM dictionaries.companies WHERE name = $1;", name
+            )
+
+        cache["companies"][name] = comp_id
+        return comp_id
 
 
-async def get_or_create_location(conn, city_name, region, cache):
+async def get_or_create_location(conn, city_name, region, cache, cache_lock):
     if not city_name:
         return None
     city_name = city_name[:99]
-    if city_name in cache["locations"]:
-        return cache["locations"][city_name]
-    loc_id = await conn.fetchval(
-        "SELECT id FROM dictionaries.locations WHERE city_name = $1 LIMIT 1;", city_name
-    )
-    if not loc_id:
+
+    async with cache_lock:
+        if city_name in cache["locations"]:
+            return cache["locations"][city_name]
+
         loc_id = await conn.fetchval(
-            "INSERT INTO dictionaries.locations (city_name, region) VALUES ($1, $2) RETURNING id;",
+            "SELECT id FROM dictionaries.locations WHERE city_name = $1 LIMIT 1;",
             city_name,
-            region,
         )
-    cache["locations"][city_name] = loc_id
-    return loc_id
+        if not loc_id:
+            loc_id = await conn.fetchval(
+                "INSERT INTO dictionaries.locations (city_name, region) VALUES ($1, $2) RETURNING id;",
+                city_name,
+                region,
+            )
+
+        cache["locations"][city_name] = loc_id
+        return loc_id
 
 
-async def get_or_create_skill(conn, name, category, cache):
+async def get_or_create_skill(conn, name, category, cache, cache_lock):
     if not name:
         return None
     name = name[:99]
-    if name in cache["skills"]:
-        return cache["skills"][name]
-    skill_id = await conn.fetchval(
-        "INSERT INTO dictionaries.skills (name, category) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING RETURNING id;",
-        name,
-        category,
-    )
-    if not skill_id:
+
+    async with cache_lock:
+        if name in cache["skills"]:
+            return cache["skills"][name]
+
         skill_id = await conn.fetchval(
-            "SELECT id FROM dictionaries.skills WHERE name = $1;", name
+            "INSERT INTO dictionaries.skills (name, category) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING RETURNING id;",
+            name,
+            category,
         )
-    cache["skills"][name] = skill_id
-    return skill_id
+        if not skill_id:
+            skill_id = await conn.fetchval(
+                "SELECT id FROM dictionaries.skills WHERE name = $1;", name
+            )
+
+        cache["skills"][name] = skill_id
+        return skill_id
 
 
-async def process_single_vacancy(record, cache, semaphore):
+async def process_single_vacancy(record, cache, cache_lock, semaphore):
     staging_id = record["id"]
     raw_html = record["raw_html"]
-    raw_json = record["raw_json"]
-
-    if isinstance(raw_json, str):
-        raw_json = json.loads(raw_json)
-    if not raw_json:
-        raw_json = {}
+    raw_json = (
+        record["raw_json"]
+        if isinstance(record["raw_json"], dict)
+        else json.loads(record["raw_json"] or "{}")
+    )
 
     title = raw_json.get("title", "Невідома посада")
     company_name = raw_json.get("company", "")
@@ -124,7 +138,7 @@ async def process_single_vacancy(record, cache, semaphore):
                         {"role": "user", "content": prompt},
                     ],
                     model="llama-3.1-8b-instant",
-                    temperature=0,  # Повний нуль для мінімізації галюцинацій
+                    temperature=0,
                     response_format={"type": "json_object"},
                 )
 
@@ -132,28 +146,28 @@ async def process_single_vacancy(record, cache, semaphore):
                 if not response_text:
                     raise ValueError("Отримано порожню відповідь від LLM")
 
-                md_ticks = "`" * 3
-                response_text = (
-                    response_text.strip()
-                    .removeprefix(md_ticks + "json")
-                    .removeprefix(md_ticks)
-                    .removesuffix(md_ticks)
-                    .strip()
-                )
+                match = re.search(r"\{.*\}", response_text, re.DOTALL)
+                if not match:
+                    raise ValueError("LLM не повернула валідний JSON об'єкт")
 
-                ai_data = VacancySchema.model_validate_json(response_text)
+                clean_json_str = match.group(0)
+                ai_data = VacancySchema.model_validate_json(clean_json_str)
+
+                final_company = ai_data.company_name or company_name
+                final_location = ai_data.location_name or location_name
 
                 async with AsyncDatabasePool.get_connection() as conn:
                     async with conn.transaction():
                         comp_id = await get_or_create_company(
                             conn,
-                            company_name,
+                            final_company,
                             ai_data.company_industry,
                             ai_data.website_url,
                             cache,
+                            cache_lock,
                         )
                         loc_id = await get_or_create_location(
-                            conn, location_name, ai_data.region, cache
+                            conn, final_location, ai_data.region, cache, cache_lock
                         )
 
                         new_vacancy_id = await conn.fetchval(
@@ -171,7 +185,7 @@ async def process_single_vacancy(record, cache, semaphore):
 
                         for skill in ai_data.skills:
                             skill_id = await get_or_create_skill(
-                                conn, skill.name, skill.category, cache
+                                conn, skill.name, skill.category, cache, cache_lock
                             )
                             if skill_id:
                                 await conn.execute(
@@ -185,18 +199,16 @@ async def process_single_vacancy(record, cache, semaphore):
                 return True
 
             except ValidationError as ve:
-                # ВИТЯГУЄМО ТОЧНУ ПРИЧИНУ ПОМИЛКИ
                 failed_fields = [str(err.get("loc", [""])[0]) for err in ve.errors()]
                 print(
                     f"   ⚠️ Галюцинація LLM (спроба {attempt + 1}). Зламались поля: {failed_fields}"
                 )
                 await asyncio.sleep(2)
             except Exception as e:
-                error_msg = str(e)
-                if "429" in error_msg or "rate" in error_msg.lower():
+                if "429" in str(e) or "rate" in str(e).lower():
                     await asyncio.sleep(10 * (attempt + 1))
                 else:
-                    print(f"   ❌ Помилка: {error_msg}")
+                    print(f"   ❌ Помилка: {e}")
                     break
         return False
 
@@ -204,7 +216,8 @@ async def process_single_vacancy(record, cache, semaphore):
 async def main():
     await AsyncDatabasePool.initialize()
     cache = {"companies": {}, "locations": {}, "skills": {}}
-    semaphore = asyncio.Semaphore(10)
+    cache_lock = asyncio.Lock()  # Ініціалізація локу для кешу
+    semaphore = asyncio.Semaphore(8)
 
     async with AsyncDatabasePool.get_connection() as conn:
         records = await conn.fetch(
@@ -213,13 +226,14 @@ async def main():
 
     if not records:
         print("⚠️ Немає нових вакансій для обробки.")
-        #await AsyncDatabasePool.close_all()
         return
 
     print(f"🚀 Старт ASYNC обробки {len(records)} вакансій (Groq + Pydantic)...")
-    tasks = [process_single_vacancy(record, cache, semaphore) for record in records]
+    tasks = [
+        process_single_vacancy(record, cache, cache_lock, semaphore)
+        for record in records
+    ]
     await asyncio.gather(*tasks)
-    #await AsyncDatabasePool.close_all()
 
 
 if __name__ == "__main__":

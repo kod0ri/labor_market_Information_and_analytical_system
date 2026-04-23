@@ -1,7 +1,7 @@
 import os
-import json
 import re
 import asyncio
+from bs4 import BeautifulSoup
 from pydantic import ValidationError
 from groq import AsyncGroq
 from dotenv import load_dotenv
@@ -25,68 +25,70 @@ SYSTEM_INSTRUCTION = """
     "currency": "USD", 
     "experience_years": 3, 
     "english_level": "Upper-Intermediate", 
-    "skills": [ {"name": "Python", "category": "Hard", "years_of_experience": 2} ]
-    # Якщо досвід для конкретної навички не вказано, пиши years_of_experience: null.
+    "skills": [ {"name": "Python", "category": "Hard"} ]
 }
-УВАГА: skills - це ЗАВЖДИ масив об'єктів (або порожній масив []), expected_salary та experience_years - це ЗАВЖДИ цілі числа.
+УВАГА: skills - це ЗАВЖДИ масив об'єктів (без вказання досвіду для кожної навички), expected_salary та experience_years - це ЗАВЖДИ цілі числа.
 """
 
 
 def prepare_text_for_llm(raw_text: str | None) -> str:
     if not raw_text:
         return ""
-    text = re.sub(r"<[^>]+>", " ", raw_text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = BeautifulSoup(raw_text, "html.parser").get_text(separator=" ", strip=True)
     return text[:1500]
 
 
-async def get_or_create_location(conn, city_name, region, cache):
+async def get_or_create_location(conn, city_name, region, cache, cache_lock):
     if not city_name:
         return None
     city_name = city_name[:99]
-    if city_name in cache["locations"]:
-        return cache["locations"][city_name]
-    loc_id = await conn.fetchval(
-        "SELECT id FROM dictionaries.locations WHERE city_name = $1 LIMIT 1;", city_name
-    )
-    if not loc_id:
+
+    async with cache_lock:
+        if city_name in cache["locations"]:
+            return cache["locations"][city_name]
+
         loc_id = await conn.fetchval(
-            "INSERT INTO dictionaries.locations (city_name, region) VALUES ($1, $2) RETURNING id;",
+            "SELECT id FROM dictionaries.locations WHERE city_name = $1 LIMIT 1;",
             city_name,
-            region,
         )
-    cache["locations"][city_name] = loc_id
-    return loc_id
+        if not loc_id:
+            loc_id = await conn.fetchval(
+                "INSERT INTO dictionaries.locations (city_name, region) VALUES ($1, $2) RETURNING id;",
+                city_name,
+                region,
+            )
+
+        cache["locations"][city_name] = loc_id
+        return loc_id
 
 
-async def get_or_create_skill(conn, name, category, cache):
+async def get_or_create_skill(conn, name, category, cache, cache_lock):
     if not name:
         return None
     name = name[:99]
-    if name in cache["skills"]:
-        return cache["skills"][name]
-    skill_id = await conn.fetchval(
-        "INSERT INTO dictionaries.skills (name, category) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING RETURNING id;",
-        name,
-        category,
-    )
-    if not skill_id:
+
+    async with cache_lock:
+        if name in cache["skills"]:
+            return cache["skills"][name]
+
         skill_id = await conn.fetchval(
-            "SELECT id FROM dictionaries.skills WHERE name = $1;", name
+            "INSERT INTO dictionaries.skills (name, category) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING RETURNING id;",
+            name,
+            category,
         )
-    cache["skills"][name] = skill_id
-    return skill_id
+        if not skill_id:
+            skill_id = await conn.fetchval(
+                "SELECT id FROM dictionaries.skills WHERE name = $1;", name
+            )
+
+        cache["skills"][name] = skill_id
+        return skill_id
 
 
-async def process_single_resume(record, cache, semaphore):
+async def process_single_resume(record, cache, cache_lock, semaphore):
     staging_id = record["id"]
     raw_text = record["raw_text"]
-    raw_json = record["raw_json"]
 
-    if isinstance(raw_json, str):
-        raw_json = json.loads(raw_json)
-    if not raw_json:
-        raw_json = {}
 
     safe_text = prepare_text_for_llm(raw_text)
     prompt = f"Текст резюме:\n{safe_text}"
@@ -100,7 +102,7 @@ async def process_single_resume(record, cache, semaphore):
                         {"role": "user", "content": prompt},
                     ],
                     model="llama-3.1-8b-instant",
-                    temperature=0,  # Детермінованість
+                    temperature=0,
                     response_format={"type": "json_object"},
                 )
 
@@ -108,21 +110,21 @@ async def process_single_resume(record, cache, semaphore):
                 if not response_text:
                     raise ValueError("Отримано порожню відповідь від LLM")
 
-                md_ticks = "`" * 3
-                response_text = (
-                    response_text.strip()
-                    .removeprefix(md_ticks + "json")
-                    .removeprefix(md_ticks)
-                    .removesuffix(md_ticks)
-                    .strip()
-                )
+                match = re.search(r"\{.*\}", response_text, re.DOTALL)
+                if not match:
+                    raise ValueError("LLM не повернула валідний JSON об'єкт")
 
-                ai_data = ResumeSchema.model_validate_json(response_text)
+                clean_json_str = match.group(0)
+                ai_data = ResumeSchema.model_validate_json(clean_json_str)
 
                 async with AsyncDatabasePool.get_connection() as conn:
                     async with conn.transaction():
                         loc_id = await get_or_create_location(
-                            conn, ai_data.location_name, ai_data.region, cache
+                            conn,
+                            ai_data.location_name,
+                            ai_data.region,
+                            cache,
+                            cache_lock,
                         )
 
                         new_resume_id = await conn.fetchval(
@@ -138,13 +140,14 @@ async def process_single_resume(record, cache, semaphore):
                         )
 
                         for skill in ai_data.skills:
-                            skill_id = await get_or_create_skill(conn, skill.name, skill.category, cache)
-                            if skill_id: 
-                                # Змінили запит: додали years_of_experience
+                            skill_id = await get_or_create_skill(
+                                conn, skill.name, skill.category, cache, cache_lock
+                            )
+                            if skill_id:
                                 await conn.execute(
-                                    """INSERT INTO core.resume_skills (resume_id, skill_id, years_of_experience) 
-                                       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;""", 
-                                    new_resume_id, skill_id, skill.years_of_experience
+                                    "INSERT INTO core.resume_skills (resume_id, skill_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;",
+                                    new_resume_id,
+                                    skill_id,
                                 )
 
                 print(f"   💾 Успішно: [ID {staging_id}] {ai_data.title[:30]}...")
@@ -158,11 +161,10 @@ async def process_single_resume(record, cache, semaphore):
                 )
                 await asyncio.sleep(2)
             except Exception as e:
-                error_msg = str(e)
-                if "429" in error_msg or "rate" in error_msg.lower():
+                if "429" in str(e) or "rate" in str(e).lower():
                     await asyncio.sleep(10 * (attempt + 1))
                 else:
-                    print(f"   ❌ Помилка: {error_msg}")
+                    print(f"   ❌ Помилка: {e}")
                     break
         return False
 
@@ -170,7 +172,8 @@ async def process_single_resume(record, cache, semaphore):
 async def main():
     await AsyncDatabasePool.initialize()
     cache = {"locations": {}, "skills": {}}
-    semaphore = asyncio.Semaphore(10)
+    cache_lock = asyncio.Lock()  # Ініціалізація локу для кешу
+    semaphore = asyncio.Semaphore(8)
 
     async with AsyncDatabasePool.get_connection() as conn:
         records = await conn.fetch(
@@ -179,13 +182,14 @@ async def main():
 
     if not records:
         print("⚠️ Немає нових резюме для обробки.")
-        #await AsyncDatabasePool.close_all()
         return
 
     print(f"🚀 Старт ASYNC обробки {len(records)} резюме (Groq + Pydantic)...")
-    tasks = [process_single_resume(record, cache, semaphore) for record in records]
+    tasks = [
+        process_single_resume(record, cache, cache_lock, semaphore)
+        for record in records
+    ]
     await asyncio.gather(*tasks)
-    #await AsyncDatabasePool.close_all()
 
 
 if __name__ == "__main__":

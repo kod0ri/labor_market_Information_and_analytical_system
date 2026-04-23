@@ -20,6 +20,8 @@ async def fetch_html(session, url, semaphore, retries=3):
                         return await response.text()
                     elif response.status == 429:
                         await asyncio.sleep(5 * (attempt + 1))
+                    elif response.status == 404:
+                        return None
                     else:
                         response.raise_for_status()
             except Exception as e:
@@ -31,7 +33,6 @@ async def fetch_html(session, url, semaphore, retries=3):
 
 
 async def process_resume_page(session, url, external_id, semaphore):
-    """Кожна таска самостійно бере з'єднання з БД для збереження."""
     html = await fetch_html(session, url, semaphore)
     if not html:
         return
@@ -49,7 +50,6 @@ async def process_resume_page(session, url, external_id, semaphore):
         RETURNING id;
     """
 
-    # Беремо окреме з'єднання з пулу ВИКЛЮЧНО для запису
     async with AsyncDatabasePool.get_connection() as conn:
         inserted_id = await conn.fetchval(query, "work.ua", external_id, html, raw_json)
         if inserted_id:
@@ -58,51 +58,63 @@ async def process_resume_page(session, url, external_id, semaphore):
 
 async def main():
     await AsyncDatabasePool.initialize()
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(10)
 
     async with aiohttp.ClientSession() as session:
-        print("🔍 Шукаємо сторінки резюме...")
-        list_html = await fetch_html(session, SEARCH_URL, semaphore)
-
-        if not list_html:
-            print("❌ Не вдалося завантажити головну сторінку.")
-            return
-
-        soup = BeautifulSoup(list_html, "html.parser")
-        cards = soup.find_all("div", class_="card-hover")
-
+        print("🔍 Починаємо збір резюме...")
         tasks = []
-        # Тут з'єднання використовується лише послідовно для перевірки існування
+        page = 1
+        max_pages = 50
+
         async with AsyncDatabasePool.get_connection() as conn:
-            for card in cards:
-                link_tag = card.find("a", href=True)
-                if not link_tag:
-                    continue
+            while page <= max_pages:
+                # Зверни увагу: для резюме параметр починається з ? а не &
+                url = f"{SEARCH_URL}?page={page}"
+                print(f"📄 Обробка резюме, сторінка {page}...")
+                
+                list_html = await fetch_html(session, url, semaphore)
+                if not list_html:
+                    break
 
-                href = link_tag.get("href")
-                if not isinstance(href, str) or not href.startswith("/resumes/"):
-                    continue
+                soup = BeautifulSoup(list_html, "html.parser")
+                cards = soup.find_all("div", class_="card-hover")
+                
+                if not cards:
+                    break
 
-                external_id = href.split("/")[2]
-                url = f"{BASE_URL}{href}"
+                page_resumes = {}
+                for card in cards:
+                    link_tag = card.find("a", href=True)
+                    if not link_tag:
+                        continue
 
-                exists = await conn.fetchval(
-                    "SELECT id FROM staging.raw_resumes WHERE source_name = $1 AND external_id = $2;",
+                    href = link_tag.get("href")
+                    if isinstance(href, str) and href.startswith("/resumes/"):
+                        external_id = href.split("/")[2]
+                        page_resumes[external_id] = f"{BASE_URL}{href}"
+
+                if not page_resumes:
+                    break
+
+                external_ids = list(page_resumes.keys())
+                existing_records = await conn.fetch(
+                    "SELECT external_id FROM staging.raw_resumes WHERE source_name = $1 AND external_id = ANY($2::varchar[]);",
                     "work.ua",
-                    external_id,
+                    external_ids,
                 )
-                if not exists:
-                    # Більше не передаємо conn!
-                    tasks.append(
-                        process_resume_page(session, url, external_id, semaphore)
-                    )
+                existing_ids = {record["external_id"] for record in existing_records}
+
+                for ext_id, resume_url in page_resumes.items():
+                    if ext_id not in existing_ids:
+                        tasks.append(process_resume_page(session, resume_url, ext_id, semaphore))
+
+                page += 1
 
         if tasks:
             print(f"🚀 Завантажуємо {len(tasks)} нових резюме паралельно...")
             await asyncio.gather(*tasks)
         else:
             print("✨ Нових резюме не знайдено.")
-
 
 if __name__ == "__main__":
     asyncio.run(main())

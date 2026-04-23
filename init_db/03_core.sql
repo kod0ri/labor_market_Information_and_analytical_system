@@ -45,7 +45,6 @@ CREATE TABLE core.vacancy_skills (
 CREATE TABLE core.resume_skills (
     resume_id INTEGER REFERENCES core.resumes(id) ON DELETE CASCADE,
     skill_id INTEGER REFERENCES dictionaries.skills(id) ON DELETE CASCADE,
-    years_of_experience NUMERIC(4, 1), -- Досвід з конкретною технологією (напр. 1.5 роки)
     PRIMARY KEY (resume_id, skill_id)
 );
 

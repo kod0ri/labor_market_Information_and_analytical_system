@@ -20,8 +20,8 @@ class AsyncDatabasePool:
                     database=os.getenv("DB_NAME", "postgres"),
                     host=os.getenv("DB_HOST", "localhost"),
                     port=os.getenv("DB_PORT", "5432"),
-                    min_size=1,
-                    max_size=10,
+                    min_size=5,  # Збільшено мінімальну кількість
+                    max_size=30, # Збільшено максимальну кількість для паралельних тасок
                 )
                 print("✅ Асинхронний пул з'єднань з БД ініціалізовано.")
             except Exception as e:
@@ -37,6 +37,7 @@ class AsyncDatabasePool:
 
         assert cls._pool is not None
 
+        # Контекстний менеджер гарантує повернення з'єднання в пул
         async with cls._pool.acquire() as conn:
             yield conn
 

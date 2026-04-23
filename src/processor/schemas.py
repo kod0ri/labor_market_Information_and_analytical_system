@@ -5,7 +5,7 @@ from typing import List, Optional, Any
 class SkillSchema(BaseModel):
     name: str
     category: str = "Hard"
-    years_of_experience: Optional[int] = None
+    # Роки досвіду для конкретної навички нам не потрібні, БД це не підтримує
 
 
 class VacancySchema(BaseModel):
@@ -15,6 +15,9 @@ class VacancySchema(BaseModel):
     min_salary: Optional[int] = None
     max_salary: Optional[int] = None
     currency: Optional[str] = None
+
+    company_name: Optional[str] = None
+    location_name: Optional[str] = None
     company_industry: Optional[str] = None
     website_url: Optional[str] = None
     region: Optional[str] = None
@@ -22,21 +25,18 @@ class VacancySchema(BaseModel):
     @field_validator("skills", mode="before")
     @classmethod
     def fix_skills(cls, v: Any) -> Any:
-        """Перетворює список рядків від лінивої LLM на список об'єктів"""
         if not isinstance(v, list):
             return []
-
         fixed_skills = []
         for item in v:
-            if isinstance(item, str):
+            if isinstance(item, str) and item.strip():
                 fixed_skills.append({"name": item, "category": "Hard"})
             elif isinstance(item, dict):
-                # Якщо модель забула передати name, пропускаємо
-                if "name" not in item:
+                if not item.get("name"):
                     continue
-                if "category" not in item:
-                    item["category"] = "Hard"
-                fixed_skills.append(item)
+                fixed_skills.append(
+                    {"name": item.get("name"), "category": item.get("category", "Hard")}
+                )
         return fixed_skills
 
 
@@ -53,26 +53,21 @@ class ResumeSchema(BaseModel):
     @field_validator("title", mode="before")
     @classmethod
     def fix_title(cls, v: Any) -> str:
-        """Якщо LLM не знайшла посаду і повернула null"""
-        if not v:
-            return "Не вказано"
-        return str(v)
+        return str(v) if v else "Не вказано"
 
     @field_validator("skills", mode="before")
     @classmethod
     def fix_skills(cls, v: Any) -> Any:
-        """Перетворює список рядків від лінивої LLM на список об'єктів"""
         if not isinstance(v, list):
             return []
-
         fixed_skills = []
         for item in v:
-            if isinstance(item, str):
+            if isinstance(item, str) and item.strip():
                 fixed_skills.append({"name": item, "category": "Hard"})
             elif isinstance(item, dict):
-                if "name" not in item:
+                if not item.get("name"):
                     continue
-                if "category" not in item:
-                    item["category"] = "Hard"
-                fixed_skills.append(item)
+                fixed_skills.append(
+                    {"name": item.get("name"), "category": item.get("category", "Hard")}
+                )
         return fixed_skills

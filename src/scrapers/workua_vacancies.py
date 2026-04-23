@@ -20,6 +20,8 @@ async def fetch_html(session, url, semaphore, retries=3):
                         return await response.text()
                     elif response.status == 429:
                         await asyncio.sleep(5 * (attempt + 1))
+                    elif response.status == 404:
+                        return None # Сторінки закінчились
                     else:
                         response.raise_for_status()
             except Exception as e:
@@ -31,7 +33,6 @@ async def fetch_html(session, url, semaphore, retries=3):
 
 
 async def process_vacancy_page(session, url, external_id, semaphore):
-    """Кожна таска самостійно бере з'єднання з БД для збереження."""
     html = await fetch_html(session, url, semaphore)
     if not html:
         return
@@ -48,66 +49,78 @@ async def process_vacancy_page(session, url, external_id, semaphore):
     )
 
     query = """
-        INSERT INTO staging.raw_vacancies (source_name, external_id, raw_html, raw_json)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO staging.raw_vacancies (source_name, external_id, search_category, raw_html, raw_json)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (source_name, external_id) DO NOTHING
         RETURNING id;
     """
-
-    # Беремо окреме з'єднання з пулу ВИКЛЮЧНО для запису
+    
     async with AsyncDatabasePool.get_connection() as conn:
-        inserted_id = await conn.fetchval(query, "work.ua", external_id, html, raw_json)
+        inserted_id = await conn.fetchval(query, 'work.ua', external_id, 'IT', html, raw_json)
         if inserted_id:
             print(f"   📥 Нова вакансія: {title[:40]}...")
 
 
 async def main():
     await AsyncDatabasePool.initialize()
-    semaphore = asyncio.Semaphore(5)
+    # Семафор на 10 безпечний, оскільки пул БД тепер має max_size=30
+    semaphore = asyncio.Semaphore(10)
 
     async with aiohttp.ClientSession() as session:
-        print("🔍 Шукаємо сторінки вакансій...")
-        list_html = await fetch_html(session, SEARCH_URL, semaphore)
-
-        if not list_html:
-            print("❌ Не вдалося завантажити головну сторінку.")
-            return
-
-        soup = BeautifulSoup(list_html, "html.parser")
-        cards = soup.find_all("div", class_="card-hover")
-
+        print("🔍 Починаємо збір вакансій...")
         tasks = []
-        # Тут з'єднання використовується лише послідовно для перевірки існування
+        page = 1
+        max_pages = 50 # Запобіжник від безкінечного циклу
+
         async with AsyncDatabasePool.get_connection() as conn:
-            for card in cards:
-                link_tag = card.find("a", href=True)
-                if not link_tag:
-                    continue
+            while page <= max_pages:
+                url = f"{SEARCH_URL}&page={page}"
+                print(f"📄 Обробка вакансій, сторінка {page}...")
+                
+                list_html = await fetch_html(session, url, semaphore)
+                if not list_html:
+                    break # Кінець пагінації
 
-                href = link_tag.get("href")
-                if not isinstance(href, str) or not href.startswith("/jobs/"):
-                    continue
+                soup = BeautifulSoup(list_html, "html.parser")
+                cards = soup.find_all("div", class_="card-hover")
+                
+                if not cards:
+                    break
 
-                external_id = href.split("/")[2]
-                url = f"{BASE_URL}{href}"
+                page_jobs = {}
+                for card in cards:
+                    link_tag = card.find("a", href=True)
+                    if not link_tag:
+                        continue
 
-                exists = await conn.fetchval(
-                    "SELECT id FROM staging.raw_vacancies WHERE source_name = $1 AND external_id = $2;",
+                    href = link_tag.get("href")
+                    if isinstance(href, str) and href.startswith("/jobs/"):
+                        external_id = href.split("/")[2]
+                        page_jobs[external_id] = f"{BASE_URL}{href}"
+
+                if not page_jobs:
+                    break
+
+                # Вирішення проблеми N+1: один запит на всю сторінку
+                external_ids = list(page_jobs.keys())
+                existing_records = await conn.fetch(
+                    "SELECT external_id FROM staging.raw_vacancies WHERE source_name = $1 AND external_id = ANY($2::varchar[]);",
                     "work.ua",
-                    external_id,
+                    external_ids,
                 )
-                if not exists:
-                    # Більше не передаємо conn!
-                    tasks.append(
-                        process_vacancy_page(session, url, external_id, semaphore)
-                    )
+                existing_ids = {record["external_id"] for record in existing_records}
+
+                for ext_id, job_url in page_jobs.items():
+                    if ext_id not in existing_ids:
+                        tasks.append(process_vacancy_page(session, job_url, ext_id, semaphore))
+
+                page += 1
 
         if tasks:
             print(f"🚀 Завантажуємо {len(tasks)} нових вакансій паралельно...")
             await asyncio.gather(*tasks)
         else:
             print("✨ Нових вакансій не знайдено.")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
