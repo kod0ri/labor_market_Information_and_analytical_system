@@ -10,14 +10,14 @@ from src.db.database import AsyncDatabasePool
 from src.processor.schemas import ResumeSchema
 from src.processor.skill_normalizer import resolve_skill_id
 from src.processor.failure_tracker import record_failure, mark_resolved
+from src.processor.rate_limiter import TokenBucketRateLimiter
 
 load_dotenv()
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
-# TPM ліміт Groq free tier = 6000 tokens/хв
-# ~850 input + ~200 output = ~1050 tokens/запит
-# Безпечний паралелізм: 6000 / 1050 ≈ 5, беремо 3 з запасом
-GROQ_SEMAPHORE_SIZE = 3
+# Той самий глобальний rate limiter що і у вакансіях
+# Якщо запускаються паралельно — вони ділять один ліміт
+GROQ_RATE_LIMITER = TokenBucketRateLimiter(rate_per_second=0.25, burst=1)
 
 SYSTEM_INSTRUCTION = """
 Ти професійний HR-аналітик. Твоє завдання: проаналізувати текст резюме.
@@ -38,6 +38,16 @@ SYSTEM_INSTRUCTION = """
 """
 
 
+def _parse_retry_after(error: Exception) -> float:
+    """Витягує точний retry-after з повідомлення Groq."""
+    msg = str(error)
+    match = re.search(r"try again in ([0-9.]+)(s|ms)", msg)
+    if match:
+        value, unit = float(match.group(1)), match.group(2)
+        return (value if unit == "s" else value / 1000) + 0.5
+    return 10.0
+
+
 def prepare_text_for_llm(raw_text: str | None) -> str:
     if not raw_text:
         return ""
@@ -49,11 +59,9 @@ async def get_or_create_location(conn, city_name, region, cache, cache_lock):
     if not city_name:
         return None
     city_name = city_name[:99]
-
     async with cache_lock:
         if city_name in cache["locations"]:
             return cache["locations"][city_name]
-
         loc_id = await conn.fetchval(
             "SELECT id FROM dictionaries.locations WHERE city_name = $1 LIMIT 1;",
             city_name,
@@ -63,31 +71,32 @@ async def get_or_create_location(conn, city_name, region, cache, cache_lock):
                 "INSERT INTO dictionaries.locations (city_name, region) VALUES ($1, $2) RETURNING id;",
                 city_name, region,
             )
-
         cache["locations"][city_name] = loc_id
         return loc_id
 
 
-async def process_single_resume(record, cache, cache_lock, semaphore):
+async def process_single_resume(record, cache, cache_lock, rate_limiter):
     staging_id = record["id"]
     raw_text   = record["raw_text"]
 
     safe_text = prepare_text_for_llm(raw_text)
     prompt    = f"Текст резюме:\n{safe_text}"
 
-    max_attempts = 5
+    max_attempts = 3
     for attempt in range(max_attempts):
         try:
-            async with semaphore:
-                chat_completion = await client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": SYSTEM_INSTRUCTION},
-                        {"role": "user",   "content": prompt},
-                    ],
-                    model="llama-3.1-8b-instant",
-                    temperature=0,
-                    response_format={"type": "json_object"},
-                )
+            # ✅ Token Bucket: рівномірний потік запитів
+            await rate_limiter.acquire()
+
+            chat_completion = await client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user",   "content": prompt},
+                ],
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
 
             response_text = chat_completion.choices[0].message.content
             if not response_text:
@@ -131,52 +140,37 @@ async def process_single_resume(record, cache, cache_lock, semaphore):
                                 new_resume_id, skill_id,
                             )
 
-                    # ✅ Пункт 4: очищаємо raw_text після успішного парсингу.
-                    # Резюме важать ще більше ніж вакансії — HTML сторінки резюме 100-300 KB.
                     await conn.execute(
                         "UPDATE staging.raw_resumes SET raw_text = NULL WHERE id = $1;",
                         staging_id,
                     )
-
-                    # ✅ Пункт 5: знімаємо позначку помилки якщо раніше падав
                     await mark_resolved(conn, "resume", staging_id)
 
-            print(f"   💾 Успішно: [ID {staging_id}] {ai_data.title[:30]}...")
+            print(f"   💾 Успішно: [ID {staging_id}] {ai_data.title[:35]}...")
             return True
 
         except ValidationError as ve:
             failed_fields = [str(err.get("loc", [""])[0]) for err in ve.errors()]
             detail = f"fields={failed_fields}"
-            print(
-                f"   ⚠️ [ID {staging_id}] Галюцинація LLM "
-                f"(спроба {attempt + 1}/{max_attempts}). {detail}"
-            )
+            print(f"   ⚠️ [ID {staging_id}] Галюцинація LLM (спроба {attempt + 1}/{max_attempts}). {detail}")
             if attempt == max_attempts - 1:
                 async with AsyncDatabasePool.get_connection() as conn:
-                    await record_failure(
-                        conn, "resume", staging_id, "validation", detail, attempt + 1,
-                    )
+                    await record_failure(conn, "resume", staging_id, "validation", detail, attempt + 1)
             await asyncio.sleep(1)
 
         except Exception as e:
             is_rate_limit = "429" in str(e) or "rate_limit" in str(e).lower()
 
             if is_rate_limit:
-                wait = min(60, 5 * (2 ** attempt))
-                print(
-                    f"   ⏳ [ID {staging_id}] Rate limit "
-                    f"(спроба {attempt + 1}/{max_attempts}). Чекаємо {wait}s..."
-                )
+                wait = _parse_retry_after(e)
+                print(f"   ⏳ [ID {staging_id}] Rate limit (спроба {attempt + 1}/{max_attempts}). Чекаємо {wait:.1f}s...")
                 await asyncio.sleep(wait)
             else:
                 print(f"   ❌ [ID {staging_id}] Невідновлювана помилка: {e}")
                 async with AsyncDatabasePool.get_connection() as conn:
-                    await record_failure(
-                        conn, "resume", staging_id, "unknown", str(e), attempt + 1,
-                    )
+                    await record_failure(conn, "resume", staging_id, "unknown", str(e), attempt + 1)
                 return False
 
-    # Вичерпали всі спроби — фіксуємо фінальну помилку
     print(f"   💀 [ID {staging_id}] Вичерпано всі {max_attempts} спроби. Пропускаємо.")
     async with AsyncDatabasePool.get_connection() as conn:
         await record_failure(
@@ -189,8 +183,8 @@ async def process_single_resume(record, cache, cache_lock, semaphore):
 async def main():
     await AsyncDatabasePool.initialize()
     cache = {"locations": {}, "skills": {}}
-    cache_lock = asyncio.Lock()
-    semaphore  = asyncio.Semaphore(GROQ_SEMAPHORE_SIZE)
+    cache_lock   = asyncio.Lock()
+    rate_limiter = GROQ_RATE_LIMITER
 
     async with AsyncDatabasePool.get_connection() as conn:
         records = await conn.fetch(
@@ -198,7 +192,6 @@ async def main():
             SELECT s.id, s.external_id, s.raw_text, s.raw_json
             FROM staging.raw_resumes s
             LEFT JOIN core.resumes c ON s.id = c.staging_id
-            -- ✅ Пункт 5: пропускаємо записи що вже падали і ще не виправлені
             LEFT JOIN staging.failed_records f
                    ON f.staging_id  = s.id
                   AND f.record_type = 'resume'
@@ -216,16 +209,17 @@ async def main():
         return
 
     print(
-        f"🚀 Старт ASYNC обробки {len(records)} резюме "
-        f"(Groq + Pydantic, паралелізм={GROQ_SEMAPHORE_SIZE})..."
+        f"🚀 Старт обробки {len(records)} резюме "
+        f"(llama-4-scout, ~20 запитів/хв, орієнтовно {len(records)//20 + 1} хв)..."
     )
+
     tasks = [
-        process_single_resume(record, cache, cache_lock, semaphore)
+        process_single_resume(record, cache, cache_lock, rate_limiter)
         for record in records
     ]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    success = sum(1 for r in results if r)
+    success = sum(1 for r in results if r is True)
     failed  = len(results) - success
     print(f"\n📊 Результат: ✅ {success} успішно, ❌ {failed} помилок.")
 

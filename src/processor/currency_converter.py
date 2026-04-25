@@ -52,7 +52,7 @@ async def process_table(conn, table_name, rates):
         currency = record["currency"].upper().strip()
 
         multiplier = rates.get(currency)
-        if not multiplier:
+        if not currency:
             continue
 
         min_usd = int(float(min_sal) * multiplier) if min_sal is not None else None

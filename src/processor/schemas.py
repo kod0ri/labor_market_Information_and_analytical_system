@@ -21,6 +21,13 @@ class VacancySchema(BaseModel):
     company_industry: Optional[str] = None
     website_url: Optional[str] = None
     region: Optional[str] = None
+    
+    @field_validator("currency", mode="before")
+    @classmethod
+    def fix_currency(cls, v: Any) -> str | None:
+        if v in (None, "null", "NULL", "", "Null"):
+            return None
+        return str(v).upper().strip()
 
     @field_validator("skills", mode="before")
     @classmethod
@@ -54,6 +61,13 @@ class ResumeSchema(BaseModel):
     @classmethod
     def fix_title(cls, v: Any) -> str:
         return str(v) if v else "Не вказано"
+    
+    @field_validator("currency", mode="before")
+    @classmethod
+    def fix_currency(cls, v: Any) -> str | None:
+        if v in (None, "null", "NULL", "", "Null"):
+            return None
+        return str(v).upper().strip()
 
     @field_validator("skills", mode="before")
     @classmethod
