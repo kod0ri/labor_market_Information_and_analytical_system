@@ -87,3 +87,13 @@ async def run_conversion():
             print(
                 f"✅ Готово! Оновлено вакансій: {vacancies_updated}, Оновлено резюме: {resumes_updated}"
             )
+
+if __name__ == "__main__":
+    import asyncio
+    async def _main():
+        await AsyncDatabasePool.initialize()
+        try:
+            await run_conversion()
+        finally:
+            await AsyncDatabasePool.close_all()
+    asyncio.run(_main())
