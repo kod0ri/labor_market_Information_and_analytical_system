@@ -32,12 +32,13 @@ async def get_conversion_rates():
 async def process_table(conn, table_name, rates):
     """Оновлює колонки _eq (які вже є в базі за замовчуванням)."""
     # Змінили min_salary_usd на min_salary_usd_eq
-    records = await conn.fetch(f"""
+    records = await conn.fetch(f""" 
         SELECT id, min_salary, max_salary, currency 
         FROM {table_name} 
         WHERE currency IS NOT NULL 
           AND (min_salary IS NOT NULL OR max_salary IS NOT NULL)
-          AND min_salary_usd_eq IS NULL;
+          -- Перевіряємо обидва поля, щоб не потрапити в нескінченний цикл
+          AND (min_salary_usd_eq IS NULL AND max_salary_usd_eq IS NULL);
     """)
 
     if not records:

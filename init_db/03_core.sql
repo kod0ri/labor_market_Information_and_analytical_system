@@ -56,3 +56,19 @@ CREATE INDEX idx_vacancies_created_at ON core.vacancies(created_at);
 -- Індекси для таблиці резюме
 CREATE INDEX idx_resumes_location_id ON core.resumes(location_id);
 CREATE INDEX idx_resumes_created_at ON core.resumes(created_at);
+
+CREATE OR REPLACE FUNCTION update_modified_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER trigger_update_vacancies
+    BEFORE UPDATE ON core.vacancies
+    FOR EACH ROW EXECUTE FUNCTION update_modified_column();
+
+CREATE TRIGGER trigger_update_resumes
+    BEFORE UPDATE ON core.resumes
+    FOR EACH ROW EXECUTE FUNCTION update_modified_column();

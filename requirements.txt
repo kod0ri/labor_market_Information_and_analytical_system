@@ -6,3 +6,4 @@ python-dotenv>=1.0.0
 pydantic>=2.5.0
 groq>=0.4.0
 prefect>=2.14.022
+lxml>=5.4.0

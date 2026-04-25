@@ -16,22 +16,15 @@ from src.db.database import AsyncDatabasePool
 # Зарплати беремо з _usd_eq полів (вже нормалізовані конвертером).
 VACANCIES_AGGREGATION_SQL = """
     SELECT
-        s.search_category                           AS category,
+        COALESCE(s.search_category, 'UNKNOWN')      AS category,
         COUNT(v.id)                                 AS total_vacancies,
-        AVG(
-            CASE
-                WHEN v.min_salary_usd_eq IS NOT NULL AND v.max_salary_usd_eq IS NOT NULL
-                    THEN (v.min_salary_usd_eq + v.max_salary_usd_eq) / 2.0
-                WHEN v.min_salary_usd_eq IS NOT NULL
-                    THEN v.min_salary_usd_eq
-                WHEN v.max_salary_usd_eq IS NOT NULL
-                    THEN v.max_salary_usd_eq
-            END
-        )                                           AS avg_vacancy_salary_usd
+        -- ... код зарплат ...
     FROM core.vacancies v
     JOIN staging.raw_vacancies s ON v.staging_id = s.id
-    WHERE v.created_at::date = $1
-    GROUP BY s.search_category;
+    -- Використовуємо range замість ::date для роботи B-Tree індексу
+    WHERE v.created_at >= $1::timestamp 
+      AND v.created_at < ($1::timestamp + INTERVAL '1 day')
+    GROUP BY COALESCE(s.search_category, 'UNKNOWN');
 """
 
 # Резюме не мають search_category — групуємо по NULL (загальний зріз).
@@ -104,7 +97,7 @@ async def build_snapshot(target_date: date | None = None) -> None:
             await conn.execute(
                 UPSERT_SNAPSHOT_SQL,
                 target_date,
-                None,  # category = NULL → загальний зріз
+                'ALL_CATEGORIES',  # Жодних None/NULL
                 0,
                 total_resumes,
                 None,
