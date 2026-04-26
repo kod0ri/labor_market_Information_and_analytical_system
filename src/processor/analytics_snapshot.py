@@ -43,7 +43,8 @@ RESUMES_AGGREGATION_SQL = """
             END
         )               AS avg_resume_salary_usd
     FROM core.resumes r
-    WHERE r.created_at::date = $1;
+    WHERE r.created_at >= $1::timestamp 
+      AND r.created_at < ($1::timestamp + INTERVAL '1 day');
 """
 
 UPSERT_SNAPSHOT_SQL = """

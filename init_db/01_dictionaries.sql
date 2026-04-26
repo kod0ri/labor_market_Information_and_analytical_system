@@ -11,9 +11,9 @@ CREATE TABLE dictionaries.locations (
     city_name VARCHAR(100) NOT NULL,
     region VARCHAR(100),
     country VARCHAR(100) NOT NULL DEFAULT 'Ukraine',
-    is_remote BOOLEAN DEFAULT FALSE, -- Прапорець для віддаленої роботи
-    CONSTRAINT uq_location UNIQUE (city_name, region, country)
+    is_remote BOOLEAN DEFAULT FALSE
 );
+
 
 -- Компанії
 CREATE TABLE dictionaries.companies (
@@ -43,3 +43,9 @@ CREATE TABLE dictionaries.skill_synonyms (
 CREATE INDEX idx_locations_city ON dictionaries.locations(city_name);
 CREATE INDEX idx_companies_name ON dictionaries.companies(name);
 CREATE INDEX idx_skills_name ON dictionaries.skills(name);
+
+CREATE UNIQUE INDEX uq_location_idx ON dictionaries.locations (
+    city_name, 
+    COALESCE(region, ''), 
+    country
+);

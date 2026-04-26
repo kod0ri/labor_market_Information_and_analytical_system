@@ -85,10 +85,16 @@ async def get_or_create_company(conn, name, industry, website, cache, cache_lock
         cache["companies"][name] = comp_id
         return comp_id
 
-
-async def get_or_create_location(conn, city_name, region, cache, cache_lock):
+async def get_or_create_location(
+    conn, 
+    city_name: str | None, 
+    region: str | None, 
+    cache: dict, 
+    cache_lock: asyncio.Lock
+):
     if not city_name:
         return None
+    
     city_name = city_name[:99]
     async with cache_lock:
         if city_name in cache["locations"]:

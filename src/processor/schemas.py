@@ -51,7 +51,8 @@ class ResumeSchema(BaseModel):
     title: str = "Не вказано"
     location_name: Optional[str] = None
     region: Optional[str] = None
-    expected_salary: Optional[int] = None
+    min_salary: Optional[int] = None  # Замість expected_salary
+    max_salary: Optional[int] = None  # Додано для сумісності з БД
     currency: Optional[str] = None
     experience_years: Optional[int] = None
     english_level: Optional[str] = None
