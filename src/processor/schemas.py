@@ -5,23 +5,19 @@ from typing import List, Optional, Any
 class SkillSchema(BaseModel):
     name: str
     category: str = "Hard"
-    # Роки досвіду для конкретної навички нам не потрібні, БД це не підтримує
 
 
-class VacancySchema(BaseModel):
-    skills: List[SkillSchema] = Field(default_factory=list)
-    experience_years: Optional[int] = None
-    english_level: Optional[str] = None
+class _BaseJobSchema(BaseModel):
+    """Спільні поля і validators для VacancySchema та ResumeSchema."""
+    location_name: Optional[str] = None
+    region: Optional[str] = None
     min_salary: Optional[int] = None
     max_salary: Optional[int] = None
     currency: Optional[str] = None
+    experience_years: Optional[int] = None
+    english_level: Optional[str] = None
+    skills: List[SkillSchema] = Field(default_factory=list)
 
-    company_name: Optional[str] = None
-    location_name: Optional[str] = None
-    company_industry: Optional[str] = None
-    website_url: Optional[str] = None
-    region: Optional[str] = None
-    
     @field_validator("currency", mode="before")
     @classmethod
     def fix_currency(cls, v: Any) -> str | None:
@@ -34,55 +30,37 @@ class VacancySchema(BaseModel):
     def fix_skills(cls, v: Any) -> Any:
         if not isinstance(v, list):
             return []
-        fixed_skills = []
+        fixed = []
         for item in v:
             if isinstance(item, str) and item.strip():
-                fixed_skills.append({"name": item, "category": "Hard"})
-            elif isinstance(item, dict):
-                if not item.get("name"):
-                    continue
-                fixed_skills.append(
-                    {"name": item.get("name"), "category": item.get("category", "Hard")}
-                )
-        return fixed_skills
+                fixed.append({"name": item, "category": "Hard"})
+            elif isinstance(item, dict) and item.get("name"):
+                fixed.append({
+                    "name": item["name"],
+                    "category": item.get("category", "Hard"),
+                })
+        return fixed
 
 
-class ResumeSchema(BaseModel):
+class VacancySchema(_BaseJobSchema):
+    company_name: Optional[str] = None
+    company_industry: Optional[str] = None
+    website_url: Optional[str] = None
+
+
+class ResumeSchema(_BaseJobSchema):
     title: str = "Не вказано"
-    location_name: Optional[str] = None
-    region: Optional[str] = None
-    min_salary: Optional[int] = None  # Замість expected_salary
-    max_salary: Optional[int] = None  # Додано для сумісності з БД
-    currency: Optional[str] = None
-    experience_years: Optional[int] = None
-    english_level: Optional[str] = None
-    skills: List[SkillSchema] = Field(default_factory=list)
+    # LLM повертає expected_salary — маппимо в min/max через model_post_init.
+    expected_salary: Optional[int] = Field(default=None, exclude=True)
+
+    def model_post_init(self, __context: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+        if self.expected_salary is not None:
+            if self.min_salary is None:
+                self.min_salary = self.expected_salary
+            if self.max_salary is None:
+                self.max_salary = self.expected_salary
 
     @field_validator("title", mode="before")
     @classmethod
     def fix_title(cls, v: Any) -> str:
         return str(v) if v else "Не вказано"
-    
-    @field_validator("currency", mode="before")
-    @classmethod
-    def fix_currency(cls, v: Any) -> str | None:
-        if v in (None, "null", "NULL", "", "Null"):
-            return None
-        return str(v).upper().strip()
-
-    @field_validator("skills", mode="before")
-    @classmethod
-    def fix_skills(cls, v: Any) -> Any:
-        if not isinstance(v, list):
-            return []
-        fixed_skills = []
-        for item in v:
-            if isinstance(item, str) and item.strip():
-                fixed_skills.append({"name": item, "category": "Hard"})
-            elif isinstance(item, dict):
-                if not item.get("name"):
-                    continue
-                fixed_skills.append(
-                    {"name": item.get("name"), "category": item.get("category", "Hard")}
-                )
-        return fixed_skills

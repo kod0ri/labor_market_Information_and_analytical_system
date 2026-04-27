@@ -1,0 +1,11 @@
+.env
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+.idea/
+postgres_data/
+database_dump.sql
+*.md
