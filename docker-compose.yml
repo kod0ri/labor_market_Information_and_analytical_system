@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+      TZ: Europe/Kyiv
+      PGTZ: Europe/Kyiv
     ports:
       - "5432:5432"
     volumes:
@@ -38,6 +40,7 @@ services:
       - .env
     environment:
       DB_HOST: db
+      TZ: Europe/Kyiv
     depends_on:
       db:
         condition: service_healthy
@@ -50,6 +53,7 @@ services:
       - .env
     environment:
       DB_HOST: db
+      TZ: Europe/Kyiv
       # Дозволені origins для React-застосунку (через кому)
       CORS_ORIGINS: "http://localhost:3000,http://localhost:5173"
     ports:

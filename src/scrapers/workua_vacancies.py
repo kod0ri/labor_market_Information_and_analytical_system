@@ -13,11 +13,17 @@ BASE_URL = "https://www.work.ua"
 SEARCH_URL = f"{BASE_URL}/jobs-it/?days=122"
 
 
-def _sync_parse_vacancy(html: str, url: str) -> Dict[str, Any]:
+_NOT_FOUND_MARKERS = ("не знайдено", "not found", "404", "видалена", "архів")
+
+
+def _sync_parse_vacancy(html: str, url: str) -> Dict[str, Any] | None:
     soup = BeautifulSoup(html, "lxml")
 
     title_tag = soup.find("h1")
-    title = title_tag.text.strip() if title_tag else "Невідома посада"
+    title = title_tag.text.strip() if title_tag else ""
+
+    if not title or any(m in title.lower() for m in _NOT_FOUND_MARKERS):
+        return None
 
     company_tag = soup.find("a", class_="inline-block mb-sm")
     company = company_tag.text.strip() if company_tag else ""
@@ -37,6 +43,9 @@ async def process_vacancy_page(
             return
 
         parsed_data = await asyncio.to_thread(_sync_parse_vacancy, html, url)
+        if parsed_data is None:
+            return
+
         raw_json = json.dumps(parsed_data, ensure_ascii=False)
 
         query = """
