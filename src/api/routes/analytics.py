@@ -202,10 +202,13 @@ async def get_top_locations(
     Використовуй для bar chart або choropleth map.
     """
     join = _LOCATION_JOIN[type]
+    # Фільтруємо "null" рядки — LLM іноді повертає 'null' замість NULL
     query = f"""
         SELECT l.city_name, l.region, COUNT(t.id)::int AS count
         FROM dictionaries.locations l
         JOIN {join}
+        WHERE l.city_name IS NOT NULL
+          AND l.city_name NOT IN ('null', 'NULL', '')
         GROUP BY l.id, l.city_name, l.region
         ORDER BY count DESC
         LIMIT $1;

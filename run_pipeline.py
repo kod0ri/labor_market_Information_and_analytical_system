@@ -57,38 +57,30 @@ async def etl_flow():
     try:
         await AsyncDatabasePool.initialize()
 
-        # FIX #6: Використовуємо .submit() замість asyncio.gather(task()).
-        # Проблема оригіналу: asyncio.gather(prefect_task()) обходить Prefect's task runner —
-        # retry логіка, стани (PENDING/RUNNING/FAILED) і логування не працюють коректно.
-        # Це пояснювало чому Етап 2 "зникав" без помилки — Prefect не бачив задачі.
-        #
-        # .submit() реєструє задачу в Prefect, повертає Future.
-        # .result() очікує завершення і пробрасує виняток якщо задача failed.
+        # asyncio.gather() запускає async-задачі конкурентно в ОДНОМУ event loop.
+        # Попередній паттерн .submit() + asyncio.to_thread(future.result) породжував
+        # окремий thread → новий event loop → asyncpg.Pool, створений у головному loop,
+        # недосяжний → RuntimeError: Future attached to a different loop.
+        # Prefect @task декоратори при прямому виклику всередині @flow продовжують
+        # відстежувати стан задачі (PENDING/RUNNING/FAILED) і retry логіку.
 
         logger.info("--- Етап 1: Збір даних (паралельно) ---")
-        future_vac = task_scrape_vacancies.submit()
-        future_res = task_scrape_resumes.submit()
-        # Чекаємо обидві задачі — якщо одна впала, raise тут
         await asyncio.gather(
-            asyncio.to_thread(future_vac.result),
-            asyncio.to_thread(future_res.result),
+            task_scrape_vacancies(),
+            task_scrape_resumes(),
         )
 
         logger.info("--- Етап 2: NLP обробка (паралельно) ---")
-        future_nlp_vac = task_nlp_vacancies.submit()
-        future_nlp_res = task_nlp_resumes.submit()
         await asyncio.gather(
-            asyncio.to_thread(future_nlp_vac.result),
-            asyncio.to_thread(future_nlp_res.result),
+            task_nlp_vacancies(),
+            task_nlp_resumes(),
         )
 
         logger.info("--- Етап 3: Конвертація валют ---")
-        future_conv = task_convert_currencies.submit()
-        await asyncio.to_thread(future_conv.result)
+        await task_convert_currencies()
 
         logger.info("--- Етап 4: Аналітичний знімок ---")
-        future_snap = task_build_snapshot.submit()
-        await asyncio.to_thread(future_snap.result)
+        await task_build_snapshot()
 
         logger.info("✅ Пайплайн успішно завершив роботу!")
 
