@@ -36,11 +36,10 @@ async def get_or_create_location(
     if not city_name:
         return None
     city_name = city_name[:99]
-    cache_key = f"{city_name}|{region or ''}"
 
     async with cache_lock:
-        if cache_key in cache["locations"]:
-            return cache["locations"][cache_key]
+        if city_name in cache["locations"]:
+            return cache["locations"][city_name]
 
     loc_id = await conn.fetchval(
         """
@@ -59,5 +58,5 @@ async def get_or_create_location(
         )
 
     async with cache_lock:
-        cache["locations"][cache_key] = loc_id
+        cache["locations"][city_name] = loc_id
     return loc_id
