@@ -1,24 +1,57 @@
 """
-Token Bucket Rate Limiter для Groq API.
+Token Bucket Rate Limiter + GroqBudget для Groq API.
 
-Проблема яку вирішуємо:
-    Semaphore(N) контролює лише кількість одночасних запитів,
-    але не контролює темп. При N=8 і 100 задачах всі 100 стартують
-    майже одночасно → масові 429.
+llama-4-scout-17b (free tier): RPM=30, RPD=1K, TPM=30K, TPD=500K
+    ~845 tokens/запит (685 in + 160 out) → max 35 запитів/хв по TPM
+    Безпечний combined rate (2 модулі паралельно): 20 запитів/хв → 0.16 req/s кожен
 
-Рішення — Token Bucket:
-    Відро поповнюється зі швидкістю rate_per_second токенів/сек.
-    Кожен запит бере 1 токен. Якщо токенів немає — чекаємо.
-    Це гарантує рівномірний потік запитів незалежно від кількості задач.
-
-llama-4-scout-17b: TPM=30K, RPM=30
-    ~1040 tokens/запит → max 28 запитів/хв по TPM
-    Безпечно: 20 запитів/хв = 1 запит кожні 3 секунди
-    З буфером: rate_per_second = 0.3 (1 запит / 3.3s)
+GroqBudget відстежує денні ліміти (TPD, RPD) і зупиняє обробку
+до того як пайплайн почне масово отримувати 429.
 """
 
 import asyncio
 import time
+
+
+class GroqBudget:
+    """
+    Shared singleton для відстеження денних лімітів Groq API.
+
+    llama-4-scout-17b free tier: TPD=500K токенів, RPD=1K запитів.
+    Обидва nlp_vacancies і nlp_resumes імпортують один екземпляр GROQ_BUDGET.
+    Зупиняє обробку при 96% від ліміту щоб уникнути 429 в кінці пайплайну.
+    """
+    TPD_LIMIT = 500_000
+    RPD_LIMIT = 1_000
+    _TPD_STOP_AT = int(TPD_LIMIT * 0.96)   # 480K
+    _RPD_STOP_AT = int(RPD_LIMIT * 0.96)   # 960
+
+    def __init__(self):
+        self._tokens = 0
+        self._requests = 0
+        self._lock = asyncio.Lock()
+
+    async def record(self, total_tokens: int) -> None:
+        async with self._lock:
+            self._tokens += total_tokens
+            self._requests += 1
+
+    def is_exhausted(self, estimated_tokens: int = 850) -> bool:
+        """Перевіряє чи безпечно робити ще один запит (без Lock — читання stale ок)."""
+        return (
+            self._tokens + estimated_tokens >= self._TPD_STOP_AT
+            or self._requests >= self._RPD_STOP_AT
+        )
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"tokens {self._tokens:,}/{self.TPD_LIMIT:,} "
+            f"| requests {self._requests}/{self.RPD_LIMIT}"
+        )
+
+
+GROQ_BUDGET = GroqBudget()
 
 
 class TokenBucketRateLimiter:

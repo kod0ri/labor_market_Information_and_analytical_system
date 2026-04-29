@@ -5,11 +5,12 @@ CREATE TABLE core.vacancies (
     title VARCHAR(255) NOT NULL,
     company_id INTEGER REFERENCES dictionaries.companies(id),
     location_id INTEGER REFERENCES dictionaries.locations(id),
+    source_id INTEGER REFERENCES dictionaries.sources(id),
     min_salary NUMERIC,
     max_salary NUMERIC,
     currency VARCHAR(10),
-    min_salary_usd_eq NUMERIC, -- Еквівалент зарплати в USD
-    max_salary_usd_eq NUMERIC, -- Еквівалент зарплати в USD
+    min_salary_usd_eq NUMERIC,
+    max_salary_usd_eq NUMERIC,
     experience_years INTEGER,
     english_level VARCHAR(50),
     is_active BOOLEAN DEFAULT TRUE,
@@ -23,11 +24,12 @@ CREATE TABLE core.resumes (
     staging_id INTEGER REFERENCES staging.raw_resumes(id),
     title VARCHAR(255) NOT NULL,
     location_id INTEGER REFERENCES dictionaries.locations(id),
+    source_id INTEGER REFERENCES dictionaries.sources(id),
     min_salary NUMERIC,
     max_salary NUMERIC,
     currency VARCHAR(10),
-    min_salary_usd_eq NUMERIC, -- Еквівалент зарплати в USD
-    max_salary_usd_eq NUMERIC, -- Еквівалент зарплати в USD
+    min_salary_usd_eq NUMERIC,
+    max_salary_usd_eq NUMERIC,
     experience_years INTEGER,
     english_level VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -10,8 +10,8 @@ from src.db.database import AsyncDatabasePool
 from src.processor.schemas import VacancySchema
 from src.processor.skill_normalizer import resolve_skill_id
 from src.processor.failure_tracker import record_failure, mark_resolved
-from src.processor.rate_limiter import TokenBucketRateLimiter
-from src.processor.llm_utils import _parse_retry_after, prepare_text_for_llm, get_or_create_location
+from src.processor.rate_limiter import TokenBucketRateLimiter, GROQ_BUDGET
+from src.processor.llm_utils import _parse_retry_after, prepare_text_for_llm, get_or_create_location, get_or_create_source
 
 load_dotenv()
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
@@ -39,7 +39,10 @@ SYSTEM_INSTRUCTION = """
     "website_url": "https://example.com",
     "region": "Київська область"
 }
-УВАГА: skills — ЗАВЖДИ масив об'єктів {name, category}. min_salary та max_salary — ЗАВЖДИ цілі числа.
+ПРАВИЛА:
+- skills — ЗАВЖДИ масив об'єктів {name, category}. min_salary та max_salary — ЗАВЖДИ цілі числа.
+- currency — ТІЛЬКИ код ISO 4217: UAH, USD, EUR. Якщо написано "грн" або "гривня" — пиши UAH.
+- english_level — ТІЛЬКИ одне зі значень: Beginner, Elementary, Pre-Intermediate, Intermediate, Upper-Intermediate, Advanced, Fluent, Native. CEFR коди конвертуй: A1→Beginner, A2→Elementary, B1→Pre-Intermediate, B2→Upper-Intermediate, C1→Advanced, C2→Fluent. Якщо не знайдено — пиши null.
 """
 
 
@@ -81,6 +84,12 @@ async def process_single_vacancy(
     rate_limiter: TokenBucketRateLimiter, db_semaphore: asyncio.Semaphore,
 ) -> bool:
     staging_id = record["id"]
+    source_name = record["source_name"]
+
+    if GROQ_BUDGET.is_exhausted():
+        print(f"   ⏸️ [ID {staging_id}] Groq TPD/RPD budget вичерпано ({GROQ_BUDGET.summary}), пропускаємо.")
+        return False
+
     raw_html = record["raw_html"]
     raw_json = (
         record["raw_json"]
@@ -101,6 +110,10 @@ async def process_single_vacancy(
         try:
             await rate_limiter.acquire()
 
+            if GROQ_BUDGET.is_exhausted():
+                print(f"   ⏸️ [ID {staging_id}] Budget вичерпано після очікування, пропускаємо.")
+                return False
+
             chat_completion = await client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": SYSTEM_INSTRUCTION},
@@ -110,6 +123,9 @@ async def process_single_vacancy(
                 temperature=0,
                 response_format={"type": "json_object"},
             )
+
+            if chat_completion.usage:
+                await GROQ_BUDGET.record(chat_completion.usage.total_tokens)
 
             response_text = chat_completion.choices[0].message.content
             if not response_text:
@@ -134,16 +150,19 @@ async def process_single_vacancy(
                         loc_id = await get_or_create_location(
                             conn, final_location, ai_data.region, cache, cache_lock,
                         )
+                        src_id = await get_or_create_source(
+                            conn, source_name, cache, cache_lock,
+                        )
                         new_vacancy_id = await conn.fetchval(
                             """
                             INSERT INTO core.vacancies
-                                (staging_id, title, company_id, location_id,
+                                (staging_id, title, company_id, location_id, source_id,
                                  min_salary, max_salary, currency,
                                  experience_years, english_level)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                             RETURNING id;
                             """,
-                            staging_id, str(title)[:200], comp_id, loc_id,
+                            staging_id, str(title)[:200], comp_id, loc_id, src_id,
                             ai_data.min_salary, ai_data.max_salary, ai_data.currency,
                             ai_data.experience_years, ai_data.english_level,
                         )
@@ -200,7 +219,7 @@ async def process_single_vacancy(
 
 async def main() -> None:
     await AsyncDatabasePool.initialize()
-    cache = {"companies": {}, "locations": {}, "skills": {}}
+    cache = {"companies": {}, "locations": {}, "skills": {}, "sources": {}}
     cache_lock = asyncio.Lock()
     rate_limiter = GROQ_RATE_LIMITER
     db_semaphore = asyncio.Semaphore(15)
@@ -208,7 +227,7 @@ async def main() -> None:
     async with AsyncDatabasePool.get_connection() as conn:
         records = await conn.fetch(
             """
-            SELECT s.id, s.external_id, s.raw_html, s.raw_json
+            SELECT s.id, s.source_name, s.external_id, s.raw_html, s.raw_json
             FROM staging.raw_vacancies s
             LEFT JOIN core.vacancies c ON s.id = c.staging_id
             LEFT JOIN staging.failed_records f
@@ -237,6 +256,7 @@ async def main() -> None:
     )
     success = sum(1 for r in results if r is True)
     print(f"\n📊 Результат: ✅ {success} успішно, ❌ {len(results) - success} помилок.")
+    print(f"📈 Groq budget: {GROQ_BUDGET.summary}")
 
 
 if __name__ == "__main__":

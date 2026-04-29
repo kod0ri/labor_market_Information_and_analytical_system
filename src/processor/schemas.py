@@ -2,6 +2,33 @@ from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any
 
 
+_CURRENCY_ALIASES: dict[str, str] = {
+    "ГРН": "UAH", "ГРИВНЯ": "UAH", "ГРИВЕНЬ": "UAH", "HRYVNIA": "UAH",
+    "ЄВРО": "EUR", "EURO": "EUR",
+    "ДОЛАР": "USD", "DOLLAR": "USD", "DOLLARS": "USD", "ДОЛАРІВ": "USD",
+}
+
+_ENGLISH_LEVEL_MAP: dict[str, str] = {
+    "A1": "Beginner", "A2": "Elementary",
+    "B1": "Pre-Intermediate", "B2": "Upper-Intermediate",
+    "C1": "Advanced", "C2": "Fluent",
+    "BEGINNER": "Beginner",
+    "ELEMENTARY": "Elementary",
+    "PRE-INTERMEDIATE": "Pre-Intermediate", "PRE INTERMEDIATE": "Pre-Intermediate",
+    "INTERMEDIATE": "Intermediate",
+    "UPPER-INTERMEDIATE": "Upper-Intermediate", "UPPER INTERMEDIATE": "Upper-Intermediate",
+    "ADVANCED": "Advanced",
+    "FLUENT": "Fluent",
+    "NATIVE": "Native",
+    "ПОЧАТКОВИЙ": "Beginner",
+    "ЕЛЕМЕНТАРНИЙ": "Elementary", "БАЗОВИЙ": "Elementary",
+    "СЕРЕДНІЙ": "Intermediate", "СЕРЕДНЄ": "Intermediate",
+    "ВИЩЕ СЕРЕДНЬОГО": "Upper-Intermediate",
+    "ВІЛЬНО": "Advanced", "ВІЛЬНА": "Advanced", "ВІЛЬНЕ": "Advanced",
+    "ДОСКОНАЛО": "Fluent", "ДОСКОНАЛЕ": "Fluent",
+}
+
+
 class SkillSchema(BaseModel):
     name: str
     category: str = "Hard"
@@ -23,7 +50,15 @@ class _BaseJobSchema(BaseModel):
     def fix_currency(cls, v: Any) -> str | None:
         if v in (None, "null", "NULL", "", "Null"):
             return None
-        return str(v).upper().strip()
+        normalized = str(v).upper().strip()
+        return _CURRENCY_ALIASES.get(normalized, normalized)
+
+    @field_validator("english_level", mode="before")
+    @classmethod
+    def fix_english_level(cls, v: Any) -> str | None:
+        if not v or str(v).strip().lower() in ("null", "none", ""):
+            return None
+        return _ENGLISH_LEVEL_MAP.get(str(v).strip().upper())
 
     @field_validator("skills", mode="before")
     @classmethod

@@ -10,8 +10,7 @@ CREATE TABLE dictionaries.locations (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     city_name VARCHAR(100) NOT NULL,
     region VARCHAR(100),
-    country VARCHAR(100) NOT NULL DEFAULT 'Ukraine',
-    is_remote BOOLEAN DEFAULT FALSE
+    country VARCHAR(100) NOT NULL DEFAULT 'Ukraine'
 );
 
 
@@ -44,8 +43,4 @@ CREATE INDEX idx_locations_city ON dictionaries.locations(city_name);
 CREATE INDEX idx_companies_name ON dictionaries.companies(name);
 CREATE INDEX idx_skills_name ON dictionaries.skills(name);
 
-CREATE UNIQUE INDEX uq_location_idx ON dictionaries.locations (
-    city_name, 
-    COALESCE(region, ''), 
-    country
-);
+CREATE UNIQUE INDEX uq_location_idx ON dictionaries.locations (city_name, country);
