@@ -1,395 +1,208 @@
-# 503Work — Інформаційно-аналітична система ринку праці
+<div align="center">
 
-ETL-пайплайн + REST API + React-фронтенд для аналізу IT-вакансій і резюме з work.ua.
+# 503Work
+
+### Аналітика українського IT-ринку праці у реальному часі
+
+*Open-source ETL-пайплайн і дашборд, який перетворює сирі дані з work.ua на готову до прийняття рішень аналітику попиту, пропозиції, зарплат і географії.*
+
+![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind-3-06B6D4?logo=tailwindcss&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+
+</div>
+
+---
+
+## Що це
+
+**503Work** — система, яка щодня збирає вакансії та резюме з [work.ua](https://www.work.ua), пропускає текст через LLM (Groq `llama-4-scout-17b`) для витягання навичок/зарплат/досвіду, конвертує оплату у USD за курсом НБУ і подає це через REST API та інтерактивний React-дашборд.
+
+Це не ще один job board. Це **аналітичний інструмент** для:
+
+- Дослідників ринку праці та економістів
+- HR-команд, які хочуть бачити реальний попит на навички
+- Кандидатів, які шукають дані для розмови про зарплату
+- Студентів, які пишуть курсову з аналізу даних
+- Всіх, кому набридло вгадувати "скільки зараз платять Python-розробникам"
+
+---
+
+## Що вміє
+
+### Збір та обробка
+- **Асинхронний скрейпінг** work.ua — до 50 сторінок вакансій + 50 сторінок резюме за прогін
+- **LLM-екстракція** із підтримкою retry, rate-limit та budget guard (Groq має 20 RPM)
+- **Нормалізація навичок** — `Python 3`, `python`, `Пайтон` → одна сутність
+- **Конвертація зарплат** у USD за щоденним курсом НБУ
+- **Failure tracking** — кожне падіння логується для повторної обробки
+
+### Аналітика
+- **Активність ринку** — нові оголошення по day/week/month бакетах
+- **Структура досвіду у часі** — як зсувається попит між junior/middle/senior
+- **Gap-аналіз навичок** — де є дефіцит, де перенасичення
+- **Розподіл зарплат** — гістограма USD-діапазонів, зарплата vs досвід
+- **Географія** — топ міст за вакансіями і резюме окремо
+- **Англійська** — рівень вимог у вакансіях
+- **Топ роботодавців** — хто наймає найбільше
+
+### Інтерфейс
+- 6 сторінок дашборда з фільтрацією та пагінацією
+- Світла/темна тема з персистенцією
+- Адаптивність mobile → desktop
+- Health-індикатор API у топбарі
+
+---
+
+## Скріншоти
+
+> _Покладіть PNG'и у `docs/screenshots/` і замініть посилання нижче — README автоматично їх покаже._
+
+| Дашборд | Активність ринку |
+|---------|------------------|
+| ![dashboard](docs/screenshots/dashboard.png) | ![activity](docs/screenshots/activity.png) |
+
+| Навички та Gap | Зарплати vs досвід |
+|----------------|---------------------|
+| ![skills](docs/screenshots/skills.png) | ![salary](docs/screenshots/salary.png) |
+
+---
+
+## Архітектура
 
 ```
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│ work.ua  │───▶│  Scraper │───▶│  Groq    │───▶│PostgreSQL│
-└──────────┘    │  asyncio │    │  LLM     │    │   core.* │
-                └──────────┘    └──────────┘    └────┬─────┘
-                                                     │
-                  ┌──────────────────────────────────┘
+┌──────────┐    ┌────────────┐    ┌──────────┐    ┌────────────┐
+│ work.ua  │───▶│  Scraper   │───▶│  Groq    │───▶│ PostgreSQL │
+│  (HTML)  │    │  aiohttp   │    │ llama-4  │    │  core.*    │
+└──────────┘    │  + bs4     │    │ scout    │    └─────┬──────┘
+                └────────────┘    └──────────┘          │
+                                                        │
+                  ┌─────────────────────────────────────┘
                   ▼
           ┌──────────────┐         ┌─────────────────┐
           │  FastAPI     │◀────────│  503Work UI     │
           │  :8000       │   JSON  │  React + Vite   │
-          └──────────────┘         │  :5173          │
-                                   └─────────────────┘
+          │              │         │  recharts       │
+          └──────────────┘         └─────────────────┘
+                ▲
+                │
+          ┌──────┴───────┐
+          │   Prefect    │  Оркестрація 4 стадій пайплайну:
+          │   flow       │  scrape → NLP → currency → snapshot
+          └──────────────┘
 ```
-
----
-
-## Структура проекту
-
-```
-project/
-├── src/                          # Backend (Python)
-│   ├── scrapers/                 # Збір даних з work.ua
-│   │   ├── utils.py
-│   │   ├── workua_vacancies.py
-│   │   └── workua_resumes.py
-│   ├── processor/                # Обробка та збагачення
-│   │   ├── nlp_vacancies.py      # LLM-екстракція з вакансій
-│   │   ├── nlp_resumes.py        # LLM-екстракція з резюме
-│   │   ├── currency_converter.py # НБУ → USD
-│   │   ├── analytics_snapshot.py
-│   │   ├── skill_normalizer.py
-│   │   ├── failure_tracker.py
-│   │   ├── rate_limiter.py
-│   │   ├── llm_utils.py
-│   │   └── schemas.py            # Pydantic-схеми
-│   ├── api/                      # REST API для фронтенда
-│   │   ├── main.py               # FastAPI + CORS
-│   │   └── routes/
-│   │       ├── health.py
-│   │       ├── analytics.py      # 11 endpoints аналітики
-│   │       ├── vacancies.py      # Список з фільтрами
-│   │       └── resumes.py        # Список з фільтрами
-│   └── db/
-│       └── database.py           # asyncpg pool
-├── frontend/                     # 503Work — React UI
-│   ├── src/
-│   │   ├── api/                  # client, hooks, types
-│   │   ├── components/           # UI + charts/
-│   │   ├── pages/                # Dashboard, Vacancies, Resumes, Skills, Salary, Geography
-│   │   ├── lib/                  # format, theme
-│   │   ├── App.tsx
-│   │   └── main.tsx
-│   ├── package.json
-│   ├── tailwind.config.js
-│   └── vite.config.ts
-├── init_db/                      # SQL-міграції (виконуються при старті Docker)
-│   ├── 00_schemas.sql
-│   ├── 01_dictionaries.sql
-│   ├── 02_staging.sql
-│   ├── 03_core.sql
-│   ├── 04_analytics.sql
-│   ├── 05_skill_normalization.sql
-│   ├── 06_failed_records.sql
-│   └── 07_constraints_and_indexes.sql
-├── run_pipeline.py               # Точка входу ETL (Prefect flow)
-├── docker-compose.yml
-├── Dockerfile
-└── .env                          # Не комітити!
-```
-
----
-
-## Передумови
-
-| Інструмент | Версія |
-|------------|--------|
-| Docker + Docker Compose | остання стабільна |
-| Node.js | 18+ (рекомендовано 20+) |
-| Groq API Key | безкоштовно на [console.groq.com](https://console.groq.com) |
-
-(Python потрібен лише для локального запуску ETL без Docker — версія 3.11+.)
 
 ---
 
 ## Швидкий старт
 
-### 1. Налаштувати `.env`
-
 ```bash
-cp .env.example .env
+git clone https://github.com/<your-org>/503work.git
+cd 503work
+cp .env.example .env                  # додай GROQ_API_KEY
+
+docker compose up db api -d           # БД + API → :8000
+docker compose run --rm etl_worker    # 30-90 хв збору + LLM-обробки
+
+cd frontend && npm install && npm run dev    # UI → :5173
 ```
 
-Мінімум для запуску:
+Готово — відкривай [http://localhost:5173](http://localhost:5173).
 
-```env
-DB_USER=admin_denis
-DB_PASSWORD=your_password
-DB_NAME=core_postgres
-GROQ_API_KEY=gsk_...
-```
-
-### 2. Підняти БД та API
-
-```bash
-docker compose up db api -d
-```
-
-| Сервіс | Адреса |
-|--------|--------|
-| PostgreSQL | `localhost:5432` |
-| REST API | `http://localhost:8000` |
-| Swagger UI | `http://localhost:8000/docs` |
-| pgAdmin | `http://localhost:5050` (опційно) |
-
-### 3. Запустити ETL (збір даних)
-
-```bash
-docker compose run --rm etl_worker
-```
-
-⏱ Орієнтовний час: **30–90 хв** (ліміт Groq: 20 RPM). Прогрес можна дивитись:
-
-```bash
-docker compose logs etl_worker -f
-```
-
-### 4. Запустити фронтенд
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Відкрий `http://localhost:5173`.
-
----
-
-## 503Work UI — сторінки
-
-| Маршрут | Що показує |
-|---------|------------|
-| `/` | Дашборд: KPI, активність ринку, структура досвіду у часі, топ навичок/міст, англійська, топ роботодавців |
-| `/vacancies` | Таблиця вакансій з фільтрами (навичка, місто, мін. ЗП, досвід ≤ N) та пагінацією |
-| `/resumes` | Таблиця резюме з фільтрами (навичка, місто, мін. ЗП, досвід ≥ N) та пагінацією |
-| `/skills` | Топ навичок (попит/пропозиція), Gap-аналіз з топом дефіциту та перенасичення |
-| `/salary` | Розподіл зарплат у USD, гістограми, ЗП по рівнях досвіду для вакансій vs резюме |
-| `/geography` | Топ-20 міст за вакансіями/резюме з ранг-списком |
-
-Тема `світла/темна` з персистенцією у `localStorage`. Бренд-колір: `#f95514` (orange).
-
----
-
-## REST API
-
-**Base URL:** `http://localhost:8000`
-**Інтерактивна документація:** `http://localhost:8000/docs`
-
-### System
-
-| Метод | URL | Опис |
-|-------|-----|------|
-| GET | `/health` | Стан сервера та БД |
-
-### Analytics
-
-| Метод | URL | Параметри | Опис |
-|-------|-----|-----------|------|
-| GET | `/api/analytics/overview` | — | KPI: кількість вакансій/резюме, середні ЗП |
-| GET | `/api/analytics/activity` | `bucket=day\|week\|month`, `days=N` | Нові оголошення по бакетах + сер. ЗП за період |
-| GET | `/api/analytics/experience-timeline` | `type=vacancy\|resume`, `bucket`, `days` | Junior/Middle/Senior розподіл по бакетах |
-| GET | `/api/analytics/snapshots` | `days=30` | Старі щоденні snapshot'и (legacy) |
-| GET | `/api/analytics/skills` | `type`, `limit=20`, `category=Hard\|Soft` | Топ навичок |
-| GET | `/api/analytics/skills/gap` | `limit=20` | Gap-аналіз попит vs пропозиція |
-| GET | `/api/analytics/locations` | `type`, `limit=10` | Географія |
-| GET | `/api/analytics/salary-distribution` | `type` | Гістограма зарплат |
-| GET | `/api/analytics/english-levels` | `type` | Розподіл за рівнем англійської |
-| GET | `/api/analytics/experience-levels` | `type` | Бакети досвіду + сер. ЗП у бакеті |
-| GET | `/api/analytics/companies` | `limit=10` | Топ роботодавців |
-
-### Vacancies / Resumes
-
-| Метод | URL | Параметри |
-|-------|-----|-----------|
-| GET | `/api/vacancies/` | `page`, `limit`, `skill`, `location`, `min_salary_usd`, `experience_years` (≤) |
-| GET | `/api/resumes/` | `page`, `limit`, `skill`, `location`, `min_salary_usd`, `experience_years` (≥) |
-
-### Приклади відповідей
-
-**`GET /api/analytics/overview`**
-```json
-{
-  "total_vacancies": 314,
-  "total_resumes": 324,
-  "vacancies_with_salary": 121,
-  "resumes_with_salary": 198,
-  "avg_vacancy_salary_usd": 912,
-  "avg_resume_salary_usd": 845
-}
-```
-
-**`GET /api/analytics/activity?bucket=week&days=90`**
-```json
-[
-  {"bucket_start": "2026-04-27", "new_vacancies": 150, "new_resumes": 158, "avg_vacancy_salary_usd": 917, "avg_resume_salary_usd": 884},
-  {"bucket_start": "2026-05-18", "new_vacancies": 197, "new_resumes": 200, "avg_vacancy_salary_usd": 909, "avg_resume_salary_usd": 798}
-]
-```
-
-**`GET /api/analytics/experience-timeline?type=vacancy&bucket=week`**
-```json
-[
-  {"bucket_start": "2026-04-27", "junior": 67, "middle": 40, "senior": 4, "unknown": 39},
-  {"bucket_start": "2026-05-18", "junior": 76, "middle": 55, "senior": 9, "unknown": 57}
-]
-```
-
-**`GET /api/vacancies/?skill=Python&limit=1`**
-```json
-{
-  "total": 14,
-  "page": 1,
-  "limit": 1,
-  "items": [
-    {
-      "id": 1,
-      "title": "Python Developer",
-      "company_name": "TechCorp",
-      "city_name": "Київ",
-      "region": "Київська область",
-      "min_salary_usd_eq": 2000.0,
-      "max_salary_usd_eq": 3500.0,
-      "experience_years": 2,
-      "english_level": "Intermediate",
-      "created_at": "2026-04-27T10:00:00",
-      "skills": ["Docker", "FastAPI", "PostgreSQL", "Python"]
-    }
-  ]
-}
-```
-
-### CORS
-
-Дозволено `http://localhost:3000` та `http://localhost:5173` за замовчуванням. Інше — через `.env`:
-
-```env
-CORS_ORIGINS=http://localhost:4000,http://example.com
-```
-
----
-
-## ETL-пайплайн
-
-4 стадії, оркестровано через Prefect:
-
-1. **Scrape** — `workua_vacancies.py` + `workua_resumes.py` → `staging.raw_*` (до 50 сторінок кожен)
-2. **NLP** — `nlp_vacancies.py` + `nlp_resumes.py` → Groq `llama-4-scout-17b` витягує навички/зарплати/досвід → `core.*`
-3. **Currency** — `currency_converter.py` → НБУ API → `*_usd_eq` поля
-4. **Snapshot** — `analytics_snapshot.py` → `analytics.daily_market_snapshots`
-
-Точка входу: `run_pipeline.py`.
-
----
-
-## Схема бази даних
-
-```
-staging.raw_vacancies    ──┐
-staging.raw_resumes      ──┤─→ [ETL] ─→ core.vacancies  ──→ core.vacancy_skills
-staging.failed_records     │            core.resumes    ──→ core.resume_skills
-                           │                 │
-                           │      dictionaries.skills
-                           │      dictionaries.skill_synonyms
-                           │      dictionaries.locations
-                           │      dictionaries.companies
-                           │      dictionaries.sources
-                           │
-                           └──→ analytics.daily_market_snapshots
-```
+Більше деталей: **[DOCS.md](DOCS.md)** (технічна довідка) і **[DEPLOY.md](DEPLOY.md)** (production-деплой).
 
 ---
 
 ## Стек технологій
 
-**Backend:** Python 3.11, asyncio, aiohttp, BeautifulSoup, asyncpg, Prefect, Groq API, Pydantic v2, FastAPI, PostgreSQL 16, Docker.
-
-**Frontend:** React 19, TypeScript, Vite, Tailwind CSS 3, React Router v6, @tanstack/react-query, recharts.
-
----
-
-## Корисні команди
-
-```bash
-# ── Docker ──────────────────────────────────────────────
-docker compose up db api -d                # БД + API
-docker compose run --rm etl_worker         # одноразовий ETL
-docker compose logs api -f                 # логи API
-docker compose logs etl_worker -f          # логи ETL
-docker compose restart api                 # рестарт API
-docker compose build api                   # перебудувати образ
-docker compose down                        # зупинити все
-docker compose down -v                     # зупинити + видалити дані (УВАГА)
-
-# ── ETL ─────────────────────────────────────────────────
-docker compose run --rm etl_worker python src/processor/currency_converter.py
-docker compose run --rm etl_worker python src/processor/analytics_snapshot.py backfill 30
-
-# ── База ────────────────────────────────────────────────
-docker exec -it postgres_db psql -U admin_denis -d core_postgres
-
-# Скільки даних маємо:
-docker exec postgres_db psql -U admin_denis -d core_postgres -c "
-  SELECT
-    (SELECT COUNT(*) FROM core.vacancies)        AS vacancies,
-    (SELECT COUNT(*) FROM core.resumes)          AS resumes,
-    (SELECT COUNT(*) FROM staging.raw_vacancies) AS raw_vacancies,
-    (SELECT COUNT(*) FROM staging.raw_resumes)   AS raw_resumes;
-"
-
-# ── Frontend ────────────────────────────────────────────
-cd frontend
-npm install
-npm run dev                                # dev :5173
-npm run build                              # production build → dist/
-npm run lint
-```
+**Backend** — Python 3.11, asyncio, aiohttp, BeautifulSoup, asyncpg, Pydantic v2, FastAPI, Prefect, Groq SDK
+**Database** — PostgreSQL 16 (4 схеми: `staging`, `dictionaries`, `core`, `analytics`)
+**Frontend** — React 19, TypeScript 5, Vite, Tailwind CSS 3, React Router v6, TanStack Query, recharts
+**Infra** — Docker Compose, nginx (production), Let's Encrypt
 
 ---
 
-## Локальний запуск без Docker
+## REST API
 
-```bash
-pip install -r requirements.txt
-docker compose up db -d                    # БД у Docker, інше локально
-python run_pipeline.py                     # ETL
-uvicorn src.api.main:app --reload --port 8000   # API
+13 endpoints для будь-якого зрізу даних:
 
-cd frontend && npm install && npm run dev  # Frontend
 ```
+GET /api/analytics/overview                # KPI ринку
+GET /api/analytics/activity                # Нові оголошення по бакетах
+GET /api/analytics/experience-timeline     # Junior/Middle/Senior у часі
+GET /api/analytics/skills                  # Топ навичок
+GET /api/analytics/skills/gap              # Gap-аналіз
+GET /api/analytics/salary-distribution     # Гістограма ЗП
+GET /api/analytics/experience-levels       # ЗП по рівнях досвіду
+GET /api/analytics/english-levels          # Рівні англійської
+GET /api/analytics/locations               # Географія
+GET /api/analytics/companies               # Топ роботодавців
+GET /api/vacancies/                        # Пошук вакансій
+GET /api/resumes/                          # Пошук резюме
+GET /health                                # Стан API + БД
+```
+
+Інтерактивна Swagger-документація: `http://localhost:8000/docs`.
 
 ---
 
-## Змінні оточення
+## Документація
 
-| Змінна | Обов'язкова | Опис |
-|--------|-------------|------|
-| `DB_USER` | Так | Користувач PostgreSQL |
-| `DB_PASSWORD` | Так | Пароль PostgreSQL |
-| `DB_NAME` | Так | Назва бази даних |
-| `DB_HOST` | Ні | Хост БД (default: `localhost`, у docker: `db`) |
-| `DB_PORT` | Ні | Порт БД (default: `5432`) |
-| `GROQ_API_KEY` | Так (для ETL) | API-ключ Groq для NLP |
-| `PGADMIN_EMAIL` | Ні | Email для pgAdmin |
-| `PGADMIN_PASSWORD` | Ні | Пароль для pgAdmin |
-| `CORS_ORIGINS` | Ні | Дозволені origins для фронтенда (через кому) |
-| `VITE_API_BASE_URL` | Ні | API URL для фронтенда (default: `http://localhost:8000`) — у `frontend/.env` |
+| Файл | Що всередині |
+|------|--------------|
+| **[DOCS.md](DOCS.md)** | Технічний довідник: структура проекту, всі endpoints, env-змінні, схема БД, команди, troubleshooting |
+| **[DEPLOY.md](DEPLOY.md)** | Production-деплой на VPS: nginx, Let's Encrypt, systemd, бекапи, security checklist, альтернативи (Railway/Vercel/Neon) |
+| **[frontend/README.md](frontend/README.md)** | README фронтенду: структура, скрипти, тема, env |
+---
+
+## Чому "503"
+
+`HTTP 503 Service Unavailable` — стан українського ринку праці після початку повномасштабної війни: тисячі айтівців виїхали або змінили рід діяльності, компанії заморожують найм, а ті що працюють — конкурують за вузьке коло сеньйорів. Цей проект намагається показати картину **числами замість здогадок**.
 
 ---
 
-## Часті проблеми
+## Roadmap
 
-**API повертає 404 на нові endpoint'и** — старий образ. Перезібрати:
-```bash
-docker compose build api && docker compose up -d api
-```
-
-**Графіки порожні** — ETL не запускався або не догнав:
-```bash
-docker compose run --rm etl_worker
-```
-
-**CORS-помилка у браузері** — додати порт у `.env` і `docker compose restart api`:
-```env
-CORS_ORIGINS=http://localhost:5173
-```
-
-**`avg_*_salary_usd: null`** — currency_converter не пройшов:
-```bash
-docker compose run --rm etl_worker python src/processor/currency_converter.py
-```
-
-**Groq повертає 429 (rate limit)** — нормально, скрипт сам ретраїть. Чекай.
+- [x] Скрейпер work.ua (вакансії + резюме)
+- [x] LLM-нормалізація через Groq
+- [x] REST API з 13 endpoints
+- [x] React-дашборд з 6 сторінками
+- [x] Production deploy guide
+- [ ] Підтримка інших джерел: djinni.co, dou.ua
+- [ ] Email-алерти по нових вакансіях за фільтром
+- [ ] CSV/Parquet експорт для дослідників
+- [ ] Публічне дзеркало `503work.example` з read-only доступом
+- [ ] Telegram-бот з щоденним звітом
 
 ---
 
-## Документація для команди
+## Внесок у проект
 
-- [REACT_DEV_GUIDE.md](REACT_DEV_GUIDE.md) — повний гайд по фронтенду (legacy, перед `503work/` рефактором)
-- [GUIDE_HOW_TO_UP_DB.md](GUIDE_HOW_TO_UP_DB.md) — як підняти БД з дампу
-- [frontend/README.md](frontend/README.md) — README фронтенда
+Будь-який PR вітається — від виправлення опечатки в README до нового аналітичного endpoint.
+
+1. Fork → нова гілка від `master` (`feature/...` або `fix/...`)
+2. Коміт у форматі з [.gitmessage](.gitmessage): `тип(scope): опис`
+3. PR з описом ЩО і ЧОМУ
+
+Для розробки — див. **[DOCS.md](DOCS.md#локальний-запуск-без-docker)**.
+
+---
+
+## Ліцензія
+
+[MIT](LICENSE) — використовуйте, форкайте, продавайте свої аналітичні звіти. Згадка авторства буде приємною, але не обов'язковою.
+
+---
+
+<div align="center">
+
+**[Документація](DOCS.md)** · **[Деплой](DEPLOY.md)** · **[API](http://localhost:8000/docs)**
+
+Зроблено для TRPZ. Дані: [work.ua](https://www.work.ua). LLM: [Groq](https://groq.com).
+
+</div>
