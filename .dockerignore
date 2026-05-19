@@ -9,3 +9,4 @@ __pycache__/
 postgres_data/
 database_dump.sql
 *.md
+frontend/

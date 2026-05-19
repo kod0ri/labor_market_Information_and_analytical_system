@@ -12,3 +12,4 @@ __pycache__/
 # Ігноруємо налаштування IDE (VS Code, PyCharm, DataGrip)
 .vscode/
 .idea/
+.claude/

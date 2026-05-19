@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.db.database import AsyncDatabasePool
-from src.api.routes import analytics, vacancies, health
+from src.api.routes import analytics, vacancies, resumes, health
 
 
 @asynccontextmanager
@@ -43,3 +43,4 @@ app.add_middleware(
 app.include_router(health.router, tags=["System"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(vacancies.router, prefix="/api/vacancies", tags=["Vacancies"])
+app.include_router(resumes.router, prefix="/api/resumes", tags=["Resumes"])

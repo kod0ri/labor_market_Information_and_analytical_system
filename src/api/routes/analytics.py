@@ -73,6 +73,39 @@ class SkillGapItem(BaseModel):
     gap: int
 
 
+class EnglishLevelStat(BaseModel):
+    level: Optional[str]
+    count: int
+
+
+class ExperienceStat(BaseModel):
+    bucket: str
+    sort_key: int
+    count: int
+    avg_salary_usd: Optional[float]
+
+
+class CompanyStat(BaseModel):
+    name: str
+    count: int
+
+
+class ActivityPoint(BaseModel):
+    bucket_start: date
+    new_vacancies: int
+    new_resumes: int
+    avg_vacancy_salary_usd: Optional[float]
+    avg_resume_salary_usd: Optional[float]
+
+
+class ExperienceTimelinePoint(BaseModel):
+    bucket_start: date
+    junior: int
+    middle: int
+    senior: int
+    unknown: int
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("/overview", response_model=OverviewResponse)
@@ -275,4 +308,170 @@ async def get_salary_distribution(
     """
     async with AsyncDatabasePool.get_connection() as conn:
         rows = await conn.fetch(query)
+    return [dict(r) for r in rows]
+
+
+@router.get("/english-levels", response_model=list[EnglishLevelStat])
+async def get_english_levels(
+    type: Literal["vacancy", "resume"] = Query(default="vacancy"),
+):
+    """
+    Розподіл за рівнем англійської.
+    Використовуй для donut/pie chart.
+    """
+    table = _SOURCE_TABLE[type]
+    query = f"""
+        SELECT english_level AS level, COUNT(*)::int AS count
+        FROM {table}
+        GROUP BY english_level
+        ORDER BY count DESC;
+    """
+    async with AsyncDatabasePool.get_connection() as conn:
+        rows = await conn.fetch(query)
+    return [dict(r) for r in rows]
+
+
+@router.get("/experience-levels", response_model=list[ExperienceStat])
+async def get_experience_levels(
+    type: Literal["vacancy", "resume"] = Query(default="vacancy"),
+):
+    """
+    Розподіл за досвідом у роках з бакетами + середня ЗП у бакеті.
+    Використовуй для bar chart і salary-by-experience графіків.
+    """
+    table = _SOURCE_TABLE[type]
+    query = f"""
+        SELECT
+            CASE
+                WHEN experience_years IS NULL THEN 'Не вказано'
+                WHEN experience_years = 0     THEN 'Без досвіду'
+                WHEN experience_years = 1     THEN '1 рік'
+                WHEN experience_years = 2     THEN '2 роки'
+                WHEN experience_years BETWEEN 3 AND 5 THEN '3–5 років'
+                ELSE '6+ років'
+            END AS bucket,
+            CASE
+                WHEN experience_years IS NULL THEN 99
+                WHEN experience_years = 0     THEN 0
+                WHEN experience_years = 1     THEN 1
+                WHEN experience_years = 2     THEN 2
+                WHEN experience_years BETWEEN 3 AND 5 THEN 3
+                ELSE 6
+            END AS sort_key,
+            COUNT(*)::int AS count,
+            ROUND(AVG(
+                CASE WHEN min_salary_usd_eq IS NOT NULL AND max_salary_usd_eq IS NOT NULL
+                     THEN (min_salary_usd_eq + max_salary_usd_eq) / 2.0
+                     ELSE COALESCE(min_salary_usd_eq, max_salary_usd_eq)
+                END
+            )::numeric, 0)::float AS avg_salary_usd
+        FROM {table}
+        GROUP BY bucket, sort_key
+        ORDER BY sort_key;
+    """
+    async with AsyncDatabasePool.get_connection() as conn:
+        rows = await conn.fetch(query)
+    return [dict(r) for r in rows]
+
+
+_BUCKET_TRUNC: dict[str, str] = {
+    "day": "day",
+    "week": "week",
+    "month": "month",
+}
+
+
+@router.get("/activity", response_model=list[ActivityPoint])
+async def get_activity(
+    bucket: Literal["day", "week", "month"] = Query(default="week"),
+    days: int = Query(default=90, ge=7, le=730),
+):
+    """
+    Активність ринку: нові вакансії та резюме по бакетах (created_at).
+    Повертає кількість + середню ЗП у періоді.
+    Використовуй для area/line chart з перемикачем Кількість/Зарплата.
+    """
+    trunc = _BUCKET_TRUNC[bucket]
+    query = f"""
+        WITH all_rows AS (
+            SELECT
+                created_at,
+                'vacancy' AS kind,
+                CASE WHEN min_salary_usd_eq IS NOT NULL AND max_salary_usd_eq IS NOT NULL
+                     THEN (min_salary_usd_eq + max_salary_usd_eq) / 2.0
+                     ELSE COALESCE(min_salary_usd_eq, max_salary_usd_eq)
+                END AS salary_usd
+            FROM core.vacancies
+            WHERE created_at >= NOW() - ($1::int || ' days')::interval
+            UNION ALL
+            SELECT
+                created_at,
+                'resume' AS kind,
+                CASE WHEN min_salary_usd_eq IS NOT NULL AND max_salary_usd_eq IS NOT NULL
+                     THEN (min_salary_usd_eq + max_salary_usd_eq) / 2.0
+                     ELSE COALESCE(min_salary_usd_eq, max_salary_usd_eq)
+                END AS salary_usd
+            FROM core.resumes
+            WHERE created_at >= NOW() - ($1::int || ' days')::interval
+        )
+        SELECT
+            date_trunc('{trunc}', created_at)::date AS bucket_start,
+            COUNT(*) FILTER (WHERE kind = 'vacancy')::int AS new_vacancies,
+            COUNT(*) FILTER (WHERE kind = 'resume')::int  AS new_resumes,
+            ROUND(AVG(salary_usd) FILTER (WHERE kind = 'vacancy')::numeric, 0)::float AS avg_vacancy_salary_usd,
+            ROUND(AVG(salary_usd) FILTER (WHERE kind = 'resume')::numeric, 0)::float  AS avg_resume_salary_usd
+        FROM all_rows
+        GROUP BY bucket_start
+        ORDER BY bucket_start;
+    """
+    async with AsyncDatabasePool.get_connection() as conn:
+        rows = await conn.fetch(query, days)
+    return [dict(r) for r in rows]
+
+
+@router.get("/experience-timeline", response_model=list[ExperienceTimelinePoint])
+async def get_experience_timeline(
+    type: Literal["vacancy", "resume"] = Query(default="vacancy"),
+    bucket: Literal["day", "week", "month"] = Query(default="week"),
+    days: int = Query(default=90, ge=7, le=730),
+):
+    """
+    Розподіл досвіду в часі (stacked area).
+    junior = 0–1р, middle = 2–4р, senior = 5+р, unknown = NULL.
+    """
+    table = _SOURCE_TABLE[type]
+    trunc = _BUCKET_TRUNC[bucket]
+    query = f"""
+        SELECT
+            date_trunc('{trunc}', created_at)::date AS bucket_start,
+            COUNT(*) FILTER (WHERE experience_years <= 1)::int                                AS junior,
+            COUNT(*) FILTER (WHERE experience_years BETWEEN 2 AND 4)::int                     AS middle,
+            COUNT(*) FILTER (WHERE experience_years >= 5)::int                                AS senior,
+            COUNT(*) FILTER (WHERE experience_years IS NULL)::int                             AS unknown
+        FROM {table}
+        WHERE created_at >= NOW() - ($1::int || ' days')::interval
+        GROUP BY bucket_start
+        ORDER BY bucket_start;
+    """
+    async with AsyncDatabasePool.get_connection() as conn:
+        rows = await conn.fetch(query, days)
+    return [dict(r) for r in rows]
+
+
+@router.get("/companies", response_model=list[CompanyStat])
+async def get_top_companies(limit: int = Query(default=10, ge=1, le=50)):
+    """
+    Топ-компаній за кількістю вакансій.
+    """
+    query = """
+        SELECT c.name, COUNT(v.id)::int AS count
+        FROM dictionaries.companies c
+        JOIN core.vacancies v ON v.company_id = c.id
+        WHERE c.name IS NOT NULL AND c.name NOT IN ('', 'null', 'NULL')
+        GROUP BY c.name
+        ORDER BY count DESC
+        LIMIT $1;
+    """
+    async with AsyncDatabasePool.get_connection() as conn:
+        rows = await conn.fetch(query, limit)
     return [dict(r) for r in rows]
