@@ -3,6 +3,7 @@
 
 # Ігноруємо дані бази даних Docker
 postgres_data/
+database_dump.sql
 
 # Ігноруємо кеш Python
 __pycache__/
@@ -11,3 +12,4 @@ __pycache__/
 # Ігноруємо налаштування IDE (VS Code, PyCharm, DataGrip)
 .vscode/
 .idea/
+.claude/
