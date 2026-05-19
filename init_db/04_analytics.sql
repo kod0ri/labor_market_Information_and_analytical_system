@@ -1,10 +1,11 @@
--- Щоденний зріз ринку (для побудови графіків)
 CREATE TABLE analytics.daily_market_snapshots (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     snapshot_date DATE NOT NULL,
-    location_id INTEGER REFERENCES dictionaries.locations(id),
-    skill_id INTEGER REFERENCES dictionaries.skills(id),
-    active_vacancies_count INTEGER DEFAULT 0,
-    active_resumes_count INTEGER DEFAULT 0,
-    avg_offered_salary NUMERIC(10, 2),
-    PRIMARY KEY (snapshot_date, location_id, skill_id)
+    category VARCHAR(100),
+    total_vacancies INTEGER,
+    total_resumes INTEGER,
+    avg_vacancy_salary_usd NUMERIC, -- Змінено на USD
+    avg_resume_salary_usd NUMERIC,  -- Змінено на USD
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(snapshot_date, category)
 );

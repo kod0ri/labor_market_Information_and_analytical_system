@@ -1,0 +1,22 @@
+# <тип>(<scope>): <короткий опис> — до 72 символів
+#
+# Типи:
+#   feat     — нова функціональність
+#   fix      — виправлення бага
+#   refactor — рефакторинг без зміни поведінки
+#   perf     — оптимізація продуктивності
+#   chore    — залежності, конфіги, CI
+#   docs     — документація
+#   test     — тести
+#
+# Scope (необов'язково): scraper | nlp | api | db | pipeline | auth
+#
+# Приклади правильних повідомлень:
+#   feat(api): add salary-distribution endpoint
+#   fix(scraper): release DB connection per page, not per run
+#   refactor(nlp): extract shared utils to llm_utils.py
+#   chore(deps): pin groq>=0.9.0, fix prefect version typo
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Опціональне тіло: ЩО і ЧОМУ (не ЯК — код вже показує як)
+#

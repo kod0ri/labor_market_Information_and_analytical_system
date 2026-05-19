@@ -10,9 +10,9 @@ CREATE TABLE dictionaries.locations (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     city_name VARCHAR(100) NOT NULL,
     region VARCHAR(100),
-    country VARCHAR(100) NOT NULL DEFAULT 'Ukraine',
-    CONSTRAINT uq_location UNIQUE (city_name, region, country)
+    country VARCHAR(100) NOT NULL DEFAULT 'Ukraine'
 );
+
 
 -- Компанії
 CREATE TABLE dictionaries.companies (
@@ -35,3 +35,12 @@ CREATE TABLE dictionaries.skill_synonyms (
     skill_id INTEGER NOT NULL REFERENCES dictionaries.skills(id) ON DELETE CASCADE,
     synonym VARCHAR(100) NOT NULL UNIQUE
 );
+
+-- ==========================================
+-- ІНДЕКСИ (Створюються лише після таблиць!)
+-- ==========================================
+CREATE INDEX idx_locations_city ON dictionaries.locations(city_name);
+CREATE INDEX idx_companies_name ON dictionaries.companies(name);
+CREATE INDEX idx_skills_name ON dictionaries.skills(name);
+
+CREATE UNIQUE INDEX uq_location_idx ON dictionaries.locations (city_name, country);
