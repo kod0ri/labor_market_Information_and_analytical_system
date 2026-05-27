@@ -1,5 +1,9 @@
 export const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
+
+function resolveUrl(path: string): URL {
+  return new URL(path, API_BASE_URL || window.location.origin)
+}
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('auth_token')
@@ -15,7 +19,7 @@ export class ApiError extends Error {
 }
 
 export async function apiPatch<T>(path: string): Promise<T> {
-  const url = new URL(path, API_BASE_URL)
+  const url = resolveUrl(path)
   const res = await fetch(url, {
     method: 'PATCH',
     headers: { Accept: 'application/json', ...authHeaders() },
@@ -28,7 +32,7 @@ export async function apiPatch<T>(path: string): Promise<T> {
 }
 
 export async function apiGet<T>(path: string, params?: Record<string, unknown>): Promise<T> {
-  const url = new URL(path, API_BASE_URL)
+  const url = resolveUrl(path)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v === undefined || v === null || v === '') continue
