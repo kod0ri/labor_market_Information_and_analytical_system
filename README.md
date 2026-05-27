@@ -42,6 +42,18 @@ docker compose up -d --build
 
 ---
 
+## Скріншоти
+
+| Дашборд | Навички |
+|---------|---------|
+| ![dashboard](docs/screenshots/dashboard.png) | ![skills](docs/screenshots/skills.png) |
+
+| Зарплати | Активність |
+|----------|-----------|
+| ![salary](docs/screenshots/salary.png) | ![activity](docs/screenshots/activity.png) |
+
+---
+
 ## Архітектура
 
 ```
