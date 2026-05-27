@@ -1,23 +1,25 @@
-import { useQuery } from '@tanstack/react-query'
-import { apiGet } from './client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { apiGet, apiPatch } from './client'
 import type {
   ActivityPoint,
+  AdminStats,
   BucketSize,
+  ClientPaginatedResumes,
+  ClientPaginatedVacancies,
+  ClientSearchFilters,
   CompanyStat,
   DataKind,
   EnglishLevelStat,
   ExperienceStat,
   ExperienceTimelinePoint,
+  FailureRecord,
   LocationStat,
   Overview,
-  PaginatedResumes,
-  PaginatedVacancies,
-  ResumeFilters,
+  PipelineStatus,
   SalaryBucket,
   SkillCategory,
   SkillGap,
   SkillStat,
-  VacancyFilters,
 } from './types'
 
 export function useHealth() {
@@ -72,15 +74,6 @@ export function useSalaryDistribution(type: DataKind = 'vacancy') {
   })
 }
 
-export function useVacancies(filters: VacancyFilters = {}) {
-  return useQuery({
-    queryKey: ['vacancies', filters],
-    queryFn: () =>
-      apiGet<PaginatedVacancies>('/api/vacancies/', { ...filters }),
-    placeholderData: (prev) => prev,
-  })
-}
-
 export function useEnglishLevels(type: DataKind = 'vacancy') {
   return useQuery({
     queryKey: ['english-levels', type],
@@ -128,11 +121,60 @@ export function useTopCompanies(limit = 10) {
   })
 }
 
-export function useResumes(filters: ResumeFilters = {}) {
+// ── Admin subsystem hooks ────────────────────────────────────────────────────
+
+export function useAdminStats() {
   return useQuery({
-    queryKey: ['resumes', filters],
+    queryKey: ['admin-stats'],
+    queryFn: () => apiGet<AdminStats>('/api/admin/stats'),
+    staleTime: 30 * 1000,
+  })
+}
+
+export function usePipelineStatus() {
+  return useQuery({
+    queryKey: ['admin-pipeline'],
+    queryFn: () => apiGet<PipelineStatus>('/api/admin/pipeline/status'),
+    staleTime: 30 * 1000,
+  })
+}
+
+export function useFailures(limit = 50) {
+  return useQuery({
+    queryKey: ['admin-failures', limit],
+    queryFn: () => apiGet<FailureRecord[]>('/api/admin/failures', { limit }),
+    staleTime: 30 * 1000,
+  })
+}
+
+export function useResolveFailure() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiPatch<{ success: boolean }>(`/api/admin/failures/${id}/resolve`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-failures'] })
+      void qc.invalidateQueries({ queryKey: ['admin-pipeline'] })
+    },
+  })
+}
+
+// ── Client subsystem hooks ───────────────────────────────────────────────────
+
+export function useClientVacancies(filters: ClientSearchFilters = {}) {
+  return useQuery({
+    queryKey: ['client-vacancies', filters],
     queryFn: () =>
-      apiGet<PaginatedResumes>('/api/resumes/', { ...filters }),
+      apiGet<ClientPaginatedVacancies>('/api/client/vacancies/search', { ...filters }),
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useClientResumes(filters: ClientSearchFilters = {}) {
+  return useQuery({
+    queryKey: ['client-resumes', filters],
+    queryFn: () =>
+      apiGet<ClientPaginatedResumes>('/api/client/resumes/search', { ...filters }),
     placeholderData: (prev) => prev,
   })
 }
