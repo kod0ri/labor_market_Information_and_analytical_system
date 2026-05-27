@@ -17,7 +17,8 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(new URL('/api/auth/login', API_BASE_URL).toString(), {
+      const base = API_BASE_URL || window.location.origin
+      const res = await fetch(new URL('/api/auth/login', base).toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
