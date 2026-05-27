@@ -1,21 +1,21 @@
 import { NavLink } from 'react-router-dom'
 import {
-  IconActivity,
-  IconBriefcase,
   IconCoins,
   IconDashboard,
   IconMapPin,
+  IconSearch,
+  IconSettings,
   IconSparkles,
 } from './Icon'
 import { Logo } from './Logo'
 
 const items = [
   { to: '/', label: 'Дашборд', icon: IconDashboard, end: true },
-  { to: '/vacancies', label: 'Вакансії', icon: IconBriefcase },
-  { to: '/resumes', label: 'Резюме', icon: IconActivity },
   { to: '/skills', label: 'Навички', icon: IconSparkles },
   { to: '/salary', label: 'Зарплати', icon: IconCoins },
   { to: '/geography', label: 'Географія', icon: IconMapPin },
+  { to: '/search', label: 'Пошук', icon: IconSearch },
+  { to: '/admin', label: 'Адмін', icon: IconSettings },
 ]
 
 export function Sidebar() {

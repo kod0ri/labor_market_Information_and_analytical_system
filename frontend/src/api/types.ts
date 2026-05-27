@@ -95,22 +95,6 @@ export interface Vacancy {
   skills: string[]
 }
 
-export interface PaginatedVacancies {
-  total: number
-  page: number
-  limit: number
-  items: Vacancy[]
-}
-
-export interface VacancyFilters {
-  page?: number
-  limit?: number
-  skill?: string
-  location?: string
-  min_salary_usd?: number
-  experience_years?: number
-}
-
 export interface Resume {
   id: number
   title: string
@@ -124,11 +108,56 @@ export interface Resume {
   skills: string[]
 }
 
-export interface PaginatedResumes {
-  total: number
-  page: number
-  limit: number
-  items: Resume[]
+// ── Admin subsystem ──────────────────────────────────────────────────────────
+
+export interface AdminStats {
+  processed: { vacancies: number; resumes: number }
+  dictionaries: { skills: number; companies: number; locations: number }
+  pipeline_queue: { vacancies_pending: number; resumes_pending: number }
 }
 
-export type ResumeFilters = VacancyFilters
+export interface PipelineStatus {
+  queue: { vacancies_pending: number; resumes_pending: number }
+  failures: { total_unresolved: number; by_type: Record<string, number> }
+  last_processed: { vacancy_at: string | null; resume_at: string | null }
+}
+
+export interface FailureRecord {
+  id: number
+  record_type: string
+  staging_id: number
+  error_type: string
+  error_detail: string
+  attempt_count: number
+  is_resolved: boolean
+  failed_at: string | null
+}
+
+// ── Client subsystem ─────────────────────────────────────────────────────────
+
+export interface ClientSearchFilters {
+  page?: number
+  page_size?: number
+  skill?: string
+  location?: string
+  min_salary_usd?: number
+  experience_max?: number
+  experience_min?: number
+  english_level?: string
+}
+
+export interface ClientPaginatedVacancies {
+  items: Vacancy[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface ClientPaginatedResumes {
+  items: Resume[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}

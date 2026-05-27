@@ -9,3 +9,4 @@ prefect>=2.14.22
 lxml>=5.4.0
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
+PyJWT>=2.8.0
