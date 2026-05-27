@@ -64,5 +64,15 @@ services:
       timeout: 5s
       retries: 3
 
+  frontend:
+    build: ./frontend
+    container_name: labor_market_frontend
+    restart: always
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
