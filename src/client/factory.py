@@ -1,0 +1,79 @@
+"""
+Клієнтська підсистема — Factory Method (Фабричний метод).
+
+Factory Method (GoF Creational): делегує логіку створення об'єктів
+фабричному класу. Маршрути FastAPI і Facade не знають, які конкретні
+стратегії існують — вони лише викликають фабрику з параметрами запиту.
+
+Переваги:
+- додавання нової стратегії потребує змін лише тут (OCP)
+- маршрути не залежать від конкретних класів стратегій (DIP)
+"""
+
+from typing import Any
+
+from src.client.filters import (
+    IFilterStrategy,
+    SalaryFilterStrategy,
+    ExperienceFilterStrategy,
+    LocationFilterStrategy,
+    SkillFilterStrategy,
+    EnglishLevelFilterStrategy,
+    CompositeFilterStrategy,
+)
+
+
+class FilterStrategyFactory:
+    """
+    Фабрика стратегій фільтрації.
+
+    create_vacancy_filters / create_resume_filters — два варіанти
+    Фабричного методу, адаптованих під різні endpoint-и.
+    """
+
+    @staticmethod
+    def create_vacancy_filters(
+        min_salary_usd: int | None = None,
+        experience_max: int | None = None,
+        location: str | None = None,
+        skill: str | None = None,
+        english_level: str | None = None,
+    ) -> CompositeFilterStrategy:
+        strategies: list[IFilterStrategy] = []
+
+        if min_salary_usd is not None:
+            strategies.append(SalaryFilterStrategy(min_salary_usd=min_salary_usd))
+        if experience_max is not None:
+            strategies.append(ExperienceFilterStrategy(max_years=experience_max))
+        if location:
+            strategies.append(LocationFilterStrategy(city=location))
+        if skill:
+            strategies.append(SkillFilterStrategy(skill_name=skill))
+        if english_level:
+            strategies.append(EnglishLevelFilterStrategy(level=english_level))
+
+        return CompositeFilterStrategy(strategies)
+
+    @staticmethod
+    def create_resume_filters(
+        min_salary_usd: int | None = None,
+        experience_min: int | None = None,
+        location: str | None = None,
+        skill: str | None = None,
+        english_level: str | None = None,
+    ) -> CompositeFilterStrategy:
+        strategies: list[IFilterStrategy] = []
+
+        if min_salary_usd is not None:
+            strategies.append(SalaryFilterStrategy(min_salary_usd=min_salary_usd))
+        if experience_min is not None:
+            # Для резюме — мінімальний досвід (кандидат має >= N років)
+            strategies.append(ExperienceFilterStrategy(max_years=experience_min))
+        if location:
+            strategies.append(LocationFilterStrategy(city=location))
+        if skill:
+            strategies.append(SkillFilterStrategy(skill_name=skill))
+        if english_level:
+            strategies.append(EnglishLevelFilterStrategy(level=english_level))
+
+        return CompositeFilterStrategy(strategies)
