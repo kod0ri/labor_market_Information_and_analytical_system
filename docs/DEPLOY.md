@@ -97,6 +97,11 @@ DB_PORT=5432
 # Groq для NLP
 GROQ_API_KEY=gsk_...
 
+# Адмін-панель
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=<сильний-пароль>            # openssl rand -base64 16
+JWT_SECRET=<випадковий-рядок>              # openssl rand -base64 32
+
 # pgAdmin — взагалі не запускай у production, або сильний пароль
 PGADMIN_EMAIL=admin@yourdomain.com
 PGADMIN_PASSWORD=<сильний-пароль>
@@ -110,18 +115,18 @@ CORS_ORIGINS=https://503work.example.com
 > openssl rand -base64 32
 > ```
 
-### 3.3. Запустити БД + API
+### 3.3. Запустити всі сервіси
 
 ```bash
-docker compose up db api -d
-docker compose ps           # обидва healthy?
+docker compose up -d --build
+docker compose ps           # всі healthy?
 ```
 
-Перевірити локально на сервері:
+Перевірити:
 
 ```bash
 curl http://localhost:8000/health
-# {"status": "ok", "database": "connected"}
+curl -o /dev/null -w "%{http_code}\n" http://localhost:5173   # → 200
 ```
 
 ### 3.4. Запустити перший ETL
@@ -130,29 +135,12 @@ curl http://localhost:8000/health
 docker compose run --rm etl_worker
 ```
 
-⏱ ~30–90 хв. Можна запустити у фоні та слідкувати:
+⏱ ~30–90 хв. Можна у фоні:
 
 ```bash
 docker compose run --rm -d etl_worker
 docker compose logs etl_worker -f
 ```
-
-### 3.5. Зібрати фронтенд
-
-```bash
-# Встанови Node.js (якщо ще не встановлено)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
-sudo apt install -y nodejs
-
-cd frontend
-echo "VITE_API_BASE_URL=https://503work.example.com/api" > .env
-npm ci
-npm run build
-```
-
-Результат: `frontend/dist/` — статичні файли для nginx.
-
-> Альтернатива: збирай локально та копіюй `dist/` на сервер через `rsync`. Це швидше та не вимагає Node.js на VPS.
 
 ---
 
@@ -445,11 +433,10 @@ docker compose up -d api      # тільки API; ETL запуститься з 
 ### 9.2. Фронтенд
 
 ```bash
-cd ~/503work/frontend
-git pull          # якщо не зробив у п. 9.1
-npm ci            # тільки якщо змінився package-lock.json
-npm run build
-sudo systemctl reload nginx
+cd ~/503work
+git pull
+docker compose build frontend
+docker compose up -d frontend
 ```
 
 ### 9.3. Зміна схеми БД
@@ -465,6 +452,7 @@ docker exec -i postgres_db psql -U labor_market -d core_postgres < init_db/08_ne
 ## 10. Security checklist
 
 - [ ] Сильні паролі для `DB_PASSWORD` та `PGADMIN_PASSWORD` (32+ символи)
+- [ ] `ADMIN_PASSWORD` та `JWT_SECRET` змінені з дефолтних
 - [ ] `CORS_ORIGINS` обмежений лише production-доменом
 - [ ] `5432`, `8000`, `5050` НЕ відкриті в інтернет (`ufw status`)
 - [ ] SSH тільки по ключу (`PasswordAuthentication no` у `/etc/ssh/sshd_config`)
@@ -532,17 +520,15 @@ Build command: `npm run build`. Output: `dist`. Env: `VITE_API_BASE_URL=https://
 ## 13. Швидка пам'ятка
 
 ```bash
-# Старт
-docker compose up db api -d
+# Старт (все)
+docker compose up -d --build
 
 # Логи
 docker compose logs api -f
+docker compose logs frontend -f
 
-# Перебудувати backend після git pull
-docker compose build api && docker compose up -d api
-
-# Перебудувати фронтенд після git pull
-cd frontend && npm ci && npm run build && sudo systemctl reload nginx
+# Перебудувати після git pull
+docker compose build api frontend && docker compose up -d api frontend
 
 # Ручний ETL
 docker compose run --rm etl_worker
