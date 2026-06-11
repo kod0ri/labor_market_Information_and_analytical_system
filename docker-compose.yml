@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     ports:
-      - "5432:5432"
+      # Тільки локально/через VPN — не світимо БД у мережу
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init_db:/docker-entrypoint-initdb.d
@@ -22,11 +23,13 @@ services:
     image: dpage/pgadmin4
     container_name: pgadmin_web
     restart: always
+    # Опційний інструмент: запуск лише з --profile tools, доступ через localhost/VPN
+    profiles: ["tools"]
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       - db
 
@@ -34,6 +37,9 @@ services:
     build: .
     container_name: etl_pipeline_worker
     restart: on-failure
+    # Не стартує разом зі стеком (не жере Groq-квоту на кожному up).
+    # Запуск вручну: docker compose run --rm etl_worker
+    profiles: ["manual"]
     env_file:
       - .env
     environment:
@@ -50,10 +56,8 @@ services:
       - .env
     environment:
       DB_HOST: db
-      # Дозволені origins для React-застосунку (через кому)
-      CORS_ORIGINS: "http://localhost:3000,http://localhost:5173"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       db:
@@ -63,16 +67,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - default
+      - homelab
 
   frontend:
     build: ./frontend
     container_name: labor_market_frontend
     restart: always
-    ports:
-      - "5173:80"
     depends_on:
       api:
         condition: service_healthy
+    networks:
+      - default
+      - homelab
 
 volumes:
   postgres_data:
+
+networks:
+  homelab:
+    external: true
