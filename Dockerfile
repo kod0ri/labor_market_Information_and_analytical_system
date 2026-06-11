@@ -1,10 +1,8 @@
 # Використовуємо офіційний легкий образ Python
 FROM python:3.11-slim
 
-# Встановлюємо системні залежності, необхідні для компіляції деяких Python-пакетів
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Усі залежності (asyncpg, lxml, aiohttp) мають готові manylinux-wheels під cp311,
+# тому компілятор не потрібен — образ менший і збірка швидша.
 
 # Встановлюємо робочу директорію
 WORKDIR /app
