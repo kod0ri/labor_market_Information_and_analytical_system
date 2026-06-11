@@ -1,0 +1,14 @@
+# Залежності й артефакти збірки — ставляться/будуються всередині образу
+node_modules/
+dist/
+
+# Секрети та локальне
+.env
+.env.local
+*.log
+
+# VCS / IDE
+.git
+.gitignore
+.vscode/
+.idea/

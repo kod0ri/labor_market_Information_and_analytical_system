@@ -1,12 +1,32 @@
+# Секрети та VCS
 .env
 .git
 .gitignore
+
+# Python кеш / venv
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+venv/
+
+# IDE
 .vscode/
 .idea/
+.claude/
+
+# Дані БД та дампи (не потрібні в образі)
 postgres_data/
-database_dump.sql
+database_dump.*
+*.sql
+*.sql.gz
+*.gz
+
+# Документація та звіти (не потрібні в runtime-образі)
 *.md
+docs/
+*.pdf
+*.docx
+
+# Фронтенд має власний build-контекст
 frontend/
