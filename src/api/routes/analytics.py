@@ -90,6 +90,12 @@ class CompanyStat(BaseModel):
     count: int
 
 
+class SourceStat(BaseModel):
+    source: str
+    vacancies: int
+    resumes: int
+
+
 class ActivityPoint(BaseModel):
     bucket_start: date
     new_vacancies: int
@@ -474,4 +480,30 @@ async def get_top_companies(limit: int = Query(default=10, ge=1, le=50)):
     """
     async with AsyncDatabasePool.get_connection() as conn:
         rows = await conn.fetch(query, limit)
+    return [dict(r) for r in rows]
+
+
+@router.get("/sources", response_model=list[SourceStat])
+async def get_sources():
+    """
+    Розбивка вакансій та резюме за джерелом даних (work.ua, dou.ua, robota.ua).
+    Використовуй для breakdown-картки та наповнення фільтра за джерелом.
+    """
+    query = """
+        SELECT
+            s.name AS source,
+            COALESCE(v.cnt, 0)::int AS vacancies,
+            COALESCE(r.cnt, 0)::int AS resumes
+        FROM dictionaries.sources s
+        LEFT JOIN (
+            SELECT source_id, COUNT(*) AS cnt FROM core.vacancies GROUP BY source_id
+        ) v ON v.source_id = s.id
+        LEFT JOIN (
+            SELECT source_id, COUNT(*) AS cnt FROM core.resumes GROUP BY source_id
+        ) r ON r.source_id = s.id
+        WHERE COALESCE(v.cnt, 0) + COALESCE(r.cnt, 0) > 0
+        ORDER BY vacancies DESC, resumes DESC;
+    """
+    async with AsyncDatabasePool.get_connection() as conn:
+        rows = await conn.fetch(query)
     return [dict(r) for r in rows]

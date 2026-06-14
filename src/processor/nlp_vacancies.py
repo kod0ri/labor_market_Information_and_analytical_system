@@ -11,7 +11,13 @@ from src.processor.schemas import VacancySchema
 from src.processor.skill_normalizer import resolve_skill_id
 from src.processor.failure_tracker import record_failure, mark_resolved
 from src.processor.rate_limiter import TokenBucketRateLimiter, GROQ_BUDGET
-from src.processor.llm_utils import _parse_retry_after, prepare_text_for_llm, get_or_create_location, get_or_create_source
+from src.processor.llm_utils import (
+    _parse_retry_after,
+    prepare_text_for_llm,
+    get_or_create_company,
+    get_or_create_location,
+    get_or_create_source,
+)
 
 load_dotenv()
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
@@ -44,39 +50,6 @@ SYSTEM_INSTRUCTION = """
 - currency — ТІЛЬКИ код ISO 4217: UAH, USD, EUR. Якщо написано "грн" або "гривня" — пиши UAH.
 - english_level — ТІЛЬКИ одне зі значень: Beginner, Elementary, Pre-Intermediate, Intermediate, Upper-Intermediate, Advanced, Fluent, Native. CEFR коди конвертуй: A1→Beginner, A2→Elementary, B1→Pre-Intermediate, B2→Upper-Intermediate, C1→Advanced, C2→Fluent. Якщо не знайдено — пиши null.
 """
-
-
-async def get_or_create_company(
-    conn, name: str | None, industry: str | None,
-    website: str | None, cache: dict, cache_lock: asyncio.Lock,
-) -> int | None:
-    if not name:
-        return None
-    name = name[:200]
-
-    async with cache_lock:
-        if name in cache["companies"]:
-            return cache["companies"][name]
-
-    comp_id = await conn.fetchval(
-        """
-        INSERT INTO dictionaries.companies (name, industry, website_url)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (name) DO UPDATE
-            SET industry    = COALESCE(dictionaries.companies.industry, EXCLUDED.industry),
-                website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url)
-        RETURNING id;
-        """,
-        name, industry, website,
-    )
-    if not comp_id:
-        comp_id = await conn.fetchval(
-            "SELECT id FROM dictionaries.companies WHERE name = $1;", name
-        )
-
-    async with cache_lock:
-        cache["companies"][name] = comp_id
-    return comp_id
 
 
 async def process_single_vacancy(

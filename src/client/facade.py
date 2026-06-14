@@ -43,6 +43,7 @@ class MarketDataFacade:
         location: str | None = None,
         skill: str | None = None,
         english_level: str | None = None,
+        source: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
@@ -52,6 +53,7 @@ class MarketDataFacade:
             location=location,
             skill=skill,
             english_level=english_level,
+            source=source,
         )
         filters = strategy.apply({})
         offset = (page - 1) * page_size
@@ -76,6 +78,7 @@ class MarketDataFacade:
         location: str | None = None,
         skill: str | None = None,
         english_level: str | None = None,
+        source: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
@@ -85,6 +88,7 @@ class MarketDataFacade:
             location=location,
             skill=skill,
             english_level=english_level,
+            source=source,
         )
         filters = strategy.apply({})
         offset = (page - 1) * page_size

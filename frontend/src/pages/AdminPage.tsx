@@ -1,8 +1,20 @@
-import { useAdminStats, useFailures, usePipelineStatus, useResolveFailure } from '../api/hooks'
+import {
+  useAdminStats,
+  useFailures,
+  usePipelineStatus,
+  useResolveFailure,
+  useSystemMetrics,
+} from '../api/hooks'
 import { Card } from '../components/Card'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorState, Loading } from '../components/States'
-import { formatDate, formatNumber } from '../lib/format'
+import {
+  formatBytes,
+  formatDate,
+  formatDateTime,
+  formatDuration,
+  formatNumber,
+} from '../lib/format'
 
 function StatGrid({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{children}</div>
@@ -10,7 +22,7 @@ function StatGrid({ children }: { children: React.ReactNode }) {
 
 function StatItem({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-[var(--card-border)] px-4 py-3">
+    <div className="rounded-sm border border-[var(--card-border)] px-4 py-3">
       <div className="text-xs muted">{label}</div>
       <div className="mt-1 text-xl font-semibold">{value}</div>
     </div>
@@ -192,6 +204,172 @@ function FailuresSection() {
   )
 }
 
+function barColor(percent: number): string {
+  if (percent >= 85) return 'var(--err)'
+  if (percent >= 60) return 'var(--warn)'
+  return 'var(--ok)'
+}
+
+function UsageBar({ percent }: { percent: number }) {
+  const clamped = Math.max(0, Math.min(100, percent))
+  return (
+    <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-[var(--card-border)]">
+      <div
+        className="h-full transition-[width] duration-500"
+        style={{ width: `${clamped}%`, background: barColor(clamped) }}
+      />
+    </div>
+  )
+}
+
+function MetricTile({
+  label,
+  value,
+  sub,
+  percent,
+}: {
+  label: string
+  value: React.ReactNode
+  sub?: React.ReactNode
+  percent?: number
+}) {
+  return (
+    <div className="rounded-sm border border-[var(--card-border)] px-4 py-3">
+      <div className="t-label">{label}</div>
+      <div className="num mt-1 text-xl font-semibold">{value}</div>
+      {sub && <div className="mt-0.5 font-mono text-[11px] muted">{sub}</div>}
+      {percent !== undefined && <UsageBar percent={percent} />}
+    </div>
+  )
+}
+
+function SystemSection() {
+  const { data, isLoading, isError } = useSystemMetrics()
+  if (isLoading) return <Card title="Сервер та користувачі"><Loading rows={4} /></Card>
+  if (isError || !data) return <Card title="Сервер та користувачі"><ErrorState /></Card>
+
+  const { visitors, users, server } = data
+  const { disk, memory, load_average: load } = server
+
+  return (
+    <div className="space-y-6">
+      <Card
+        title="Відвідувачі"
+        description="Усі відвідувачі сайту, включно з незареєстрованими"
+      >
+        <StatGrid>
+          <MetricTile
+            label="Зараз на сайті"
+            value={
+              <span className="inline-flex items-center gap-2" style={{ color: 'var(--ok)' }}>
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--ok)' }} />
+                {formatNumber(visitors.online)}
+              </span>
+            }
+            sub="за останні 5 хв"
+          />
+          <MetricTile label="За 24 години" value={formatNumber(visitors.last_24h)} sub="унікальних" />
+          <MetricTile label="За тиждень" value={formatNumber(visitors.last_7d)} sub="унікальних" />
+          <MetricTile
+            label="Середній онлайн"
+            value={visitors.avg_online_24h.toFixed(1)}
+            sub={`за 24 год · пік ${formatNumber(visitors.peak_online_24h)}`}
+          />
+        </StatGrid>
+      </Card>
+
+      <Card title="Акаунти" description={`${users.online} онлайн зараз`}>
+        <StatGrid>
+          <StatItem label="Усього" value={formatNumber(users.total)} />
+          <StatItem
+            label="Онлайн"
+            value={
+              <span className="inline-flex items-center gap-2" style={{ color: 'var(--ok)' }}>
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--ok)' }} />
+                {formatNumber(users.online)}
+              </span>
+            }
+          />
+          <StatItem label="Нових за 7 днів" value={formatNumber(users.new_7d)} />
+        </StatGrid>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[520px] text-sm">
+            <thead className="border-b border-[var(--card-border)] text-left text-xs uppercase tracking-wider muted">
+              <tr>
+                <th className="px-3 py-2 font-medium">Акаунт</th>
+                <th className="px-3 py-2 font-medium">Статус</th>
+                <th className="px-3 py-2 font-medium">Остання активність</th>
+                <th className="px-3 py-2 font-medium">Створено</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.list.map((u) => (
+                <tr
+                  key={u.id}
+                  className="border-b border-[var(--card-border)]/70 align-middle hover:bg-[var(--card-border)]/20"
+                >
+                  <td className="px-3 py-2 font-medium">{u.username}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className="inline-flex items-center gap-1.5 font-mono text-xs"
+                      style={{ color: u.is_online ? 'var(--ok)' : 'var(--muted, inherit)' }}
+                    >
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ background: u.is_online ? 'var(--ok)' : 'var(--card-border)' }}
+                      />
+                      {u.is_online ? 'online' : 'offline'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap muted">{formatDateTime(u.last_seen_at)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap muted">{formatDateTime(u.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card title="Сервер" description={`uptime ${formatDuration(server.uptime_seconds)}`}>
+        <StatGrid>
+          <MetricTile
+            label="Диск"
+            value={`${disk.used_percent}%`}
+            sub={`${formatBytes(disk.used_bytes)} / ${formatBytes(disk.total_bytes)}`}
+            percent={disk.used_percent}
+          />
+          {memory && (
+            <MetricTile
+              label="Память"
+              value={`${memory.used_percent}%`}
+              sub={`${formatBytes(memory.used_bytes)} / ${formatBytes(memory.total_bytes)}`}
+              percent={memory.used_percent}
+            />
+          )}
+          <MetricTile
+            label="Розмір БД"
+            value={formatBytes(server.database_size_bytes)}
+            sub="postgres"
+          />
+          <MetricTile
+            label="Навантаження"
+            value={load ? load['1m'].toFixed(2) : '—'}
+            sub={
+              load
+                ? `5хв ${load['5m'].toFixed(2)} · 15хв ${load['15m'].toFixed(2)}${
+                    server.cpu_count ? ` · ${server.cpu_count} CPU` : ''
+                  }`
+                : 'недоступно'
+            }
+            percent={load && server.cpu_count ? (load['1m'] / server.cpu_count) * 100 : undefined}
+          />
+        </StatGrid>
+      </Card>
+    </div>
+  )
+}
+
 export default function AdminPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -199,6 +377,7 @@ export default function AdminPage() {
         title="Адміністративна панель"
         description="Моніторинг стану системи та управління пайплайном обробки даних"
       />
+      <SystemSection />
       <StatsSection />
       <PipelineSection />
       <FailuresSection />

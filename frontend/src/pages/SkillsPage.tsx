@@ -172,7 +172,7 @@ function GapHighlights({
             {deficits.map((g) => (
               <li key={g.name} className="flex items-center justify-between gap-3">
                 <span className="truncate font-medium" title={g.name}>{g.name}</span>
-                <span className="shrink-0 rounded-md bg-red-500/15 px-2 py-0.5 text-xs font-bold text-red-500 tabular-nums">
+                <span className="shrink-0 rounded-sm bg-red-500/15 px-2 py-0.5 text-xs font-bold text-red-500 tabular-nums">
                   +{formatNumber(g.gap)}
                 </span>
               </li>
@@ -188,7 +188,7 @@ function GapHighlights({
             {surplus.map((g) => (
               <li key={g.name} className="flex items-center justify-between gap-3">
                 <span className="truncate font-medium" title={g.name}>{g.name}</span>
-                <span className="shrink-0 rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-bold text-emerald-500 tabular-nums">
+                <span className="shrink-0 rounded-sm bg-emerald-500/15 px-2 py-0.5 text-xs font-bold text-emerald-500 tabular-nums">
                   {formatNumber(g.gap)}
                 </span>
               </li>

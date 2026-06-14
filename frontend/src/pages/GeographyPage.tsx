@@ -53,7 +53,7 @@ export default function GeographyPage() {
                   className="flex items-center justify-between gap-3 border-b border-[var(--card-border)]/60 pb-2 last:border-0"
                 >
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-brand-500/10 text-[11px] font-bold text-brand-500">
+                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-sm bg-brand-500/10 text-[11px] font-bold text-brand-500">
                       {i + 1}
                     </span>
                     <div className="min-w-0">

@@ -32,3 +32,10 @@ class IPipelineService(Protocol):
     """SRP: лише моніторинг стану пайплайну обробки даних."""
 
     async def get_pipeline_status(self, conn: Any) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class ISystemService(Protocol):
+    """SRP: лише рантайм-метрики сервера та зведення по користувачах."""
+
+    async def get_system_metrics(self, conn: Any) -> dict[str, Any]: ...

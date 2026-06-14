@@ -13,19 +13,29 @@ export function SegmentedControl<T extends string>({
   segments: Segment<T>[]
 }) {
   return (
-    <div className="inline-flex rounded-md border border-[var(--card-border)] bg-[var(--card-bg)] p-0.5 text-xs">
+    <div
+      className="inline-flex border border-[var(--card-border)] bg-[var(--app-bg)] p-0.5"
+      style={{ borderRadius: 2 }}
+      role="group"
+    >
       {segments.map((s) => {
         const active = s.value === value
         return (
           <button
             key={s.value}
             type="button"
+            aria-pressed={active}
             onClick={() => onChange(s.value)}
-            className={`rounded-[5px] px-3 py-1.5 font-medium transition-colors ${
-              active
-                ? 'bg-brand-500 text-white shadow-sm'
-                : 'muted hover:text-[var(--app-fg)]'
-            }`}
+            className={`min-h-[32px] px-2.5 font-mono text-[11px] font-medium uppercase tracking-wider
+                        transition-colors sm:px-3 ${
+                          active
+                            ? 'text-white'
+                            : 'muted hover:text-[var(--app-fg)]'
+                        }`}
+            style={{
+              borderRadius: 1,
+              background: active ? 'var(--brand)' : 'transparent',
+            }}
           >
             {s.label}
           </button>

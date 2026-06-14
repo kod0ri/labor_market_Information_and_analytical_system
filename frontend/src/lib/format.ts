@@ -40,3 +40,40 @@ export function formatPercent(value: number, total: number): string {
   if (!total) return '0%'
   return `${((value / total) * 100).toFixed(1)}%`
 }
+
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['КБ', 'МБ', 'ГБ', 'ТБ', 'ПБ']
+  let value = bytes / 1024
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i++
+  }
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`
+}
+
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleString(UA, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return iso
+  }
+}
+
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d}д ${h}г`
+  if (h > 0) return `${h}г ${m}хв`
+  return `${m}хв`
+}
