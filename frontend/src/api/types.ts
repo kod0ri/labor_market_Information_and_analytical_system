@@ -63,6 +63,12 @@ export interface CompanyStat {
   count: number
 }
 
+export interface SourceStat {
+  source: string
+  vacancies: number
+  resumes: number
+}
+
 export type BucketSize = 'day' | 'week' | 'month'
 
 export interface ActivityPoint {
@@ -133,6 +139,51 @@ export interface FailureRecord {
   failed_at: string | null
 }
 
+export interface SystemUser {
+  id: number
+  username: string
+  is_active: boolean
+  is_online: boolean
+  created_at: string | null
+  last_seen_at: string | null
+}
+
+export interface SystemMetrics {
+  visitors: {
+    online: number
+    last_24h: number
+    last_7d: number
+    avg_online_24h: number
+    peak_online_24h: number
+  }
+  users: {
+    total: number
+    active: number
+    online: number
+    new_7d: number
+    list: SystemUser[]
+  }
+  server: {
+    uptime_seconds: number
+    disk: {
+      path: string
+      total_bytes: number
+      used_bytes: number
+      free_bytes: number
+      used_percent: number
+    }
+    memory: {
+      total_bytes: number
+      used_bytes: number
+      available_bytes: number
+      used_percent: number
+    } | null
+    load_average: { '1m': number; '5m': number; '15m': number } | null
+    database_size_bytes: number
+    cpu_count: number | null
+  }
+}
+
 // ── Client subsystem ─────────────────────────────────────────────────────────
 
 export interface ClientSearchFilters {
@@ -144,6 +195,7 @@ export interface ClientSearchFilters {
   experience_max?: number
   experience_min?: number
   english_level?: string
+  source?: string
 }
 
 export interface ClientPaginatedVacancies {

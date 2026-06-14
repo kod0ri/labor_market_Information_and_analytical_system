@@ -64,31 +64,72 @@ async def get_or_create_location(
     region: str | None,
     cache: dict,
     cache_lock: asyncio.Lock,
+    country: str = "Ukraine",
 ) -> int | None:
     if not city_name:
         return None
     city_name = city_name[:99]
+    country = (country or "Ukraine")[:99]
+    cache_key = f"{country}::{city_name}"
 
     async with cache_lock:
-        if city_name in cache["locations"]:
-            return cache["locations"][city_name]
+        if cache_key in cache["locations"]:
+            return cache["locations"][cache_key]
 
     loc_id = await conn.fetchval(
         """
         INSERT INTO dictionaries.locations (city_name, region, country)
-        VALUES ($1, $2, 'Ukraine')
+        VALUES ($1, $2, $3)
         ON CONFLICT (city_name, country) DO UPDATE
             SET region = COALESCE(dictionaries.locations.region, EXCLUDED.region)
         RETURNING id;
         """,
-        city_name, region,
+        city_name, region, country,
     )
     if not loc_id:
         loc_id = await conn.fetchval(
-            "SELECT id FROM dictionaries.locations WHERE city_name = $1 AND country = 'Ukraine' LIMIT 1;",
-            city_name,
+            "SELECT id FROM dictionaries.locations WHERE city_name = $1 AND country = $2 LIMIT 1;",
+            city_name, country,
         )
 
     async with cache_lock:
-        cache["locations"][city_name] = loc_id
+        cache["locations"][cache_key] = loc_id
     return loc_id
+
+
+async def get_or_create_company(
+    conn: _ConnType,
+    name: str | None,
+    industry: str | None,
+    website: str | None,
+    cache: dict,
+    cache_lock: asyncio.Lock,
+) -> int | None:
+    """Резолв компанії (groq-free). Спільний для LLM- та прямого шляхів."""
+    if not name:
+        return None
+    name = name[:200]
+
+    async with cache_lock:
+        if name in cache["companies"]:
+            return cache["companies"][name]
+
+    comp_id = await conn.fetchval(
+        """
+        INSERT INTO dictionaries.companies (name, industry, website_url)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (name) DO UPDATE
+            SET industry    = COALESCE(dictionaries.companies.industry, EXCLUDED.industry),
+                website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url)
+        RETURNING id;
+        """,
+        name, industry, website,
+    )
+    if not comp_id:
+        comp_id = await conn.fetchval(
+            "SELECT id FROM dictionaries.companies WHERE name = $1;", name
+        )
+
+    async with cache_lock:
+        cache["companies"][name] = comp_id
+    return comp_id

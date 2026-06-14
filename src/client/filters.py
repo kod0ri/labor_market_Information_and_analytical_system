@@ -92,6 +92,19 @@ class EnglishLevelFilterStrategy:
         return result
 
 
+@dataclass
+class SourceFilterStrategy:
+    """Стратегія фільтрації за джерелом даних (work.ua, dou.ua, robota.ua)."""
+
+    source: str | None = None
+
+    def apply(self, params: dict[str, Any]) -> dict[str, Any]:
+        result = dict(params)
+        if self.source and self.source.strip():
+            result["source"] = self.source.strip()
+        return result
+
+
 class CompositeFilterStrategy:
     """
     Composite Strategy: об'єднує довільну кількість стратегій у одну.

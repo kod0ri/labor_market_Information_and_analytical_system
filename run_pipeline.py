@@ -3,6 +3,7 @@ from prefect import flow, task, get_run_logger
 
 from src.db.database import AsyncDatabasePool
 from src.scrapers import workua_vacancies, workua_resumes
+from src.sources import dou_rss, robota_vacancies
 from src.processor import nlp_vacancies, nlp_resumes, currency_converter
 from src.processor.analytics_snapshot import run_snapshot
 
@@ -19,6 +20,22 @@ async def task_scrape_resumes():
     logger = get_run_logger()
     logger.info("Починаємо збір резюме...")
     await workua_resumes.main()
+
+
+@task(name="Collect DOU RSS", retries=1, retry_delay_seconds=10)
+async def task_collect_dou():
+    """DOU.ua RSS → staging (далі LLM-обробка на етапі 2)."""
+    logger = get_run_logger()
+    logger.info("Збір вакансій з DOU.ua RSS...")
+    await dou_rss.main()
+
+
+@task(name="Collect robota.ua", retries=1, retry_delay_seconds=10)
+async def task_collect_robota():
+    """robota.ua GraphQL → staging (далі LLM-обробка на етапі 2)."""
+    logger = get_run_logger()
+    logger.info("Збір IT-вакансій з robota.ua...")
+    await robota_vacancies.main()
 
 
 @task(name="NLP Process Vacancies")
@@ -65,9 +82,14 @@ async def etl_flow():
         # відстежувати стан задачі (PENDING/RUNNING/FAILED) і retry логіку.
 
         logger.info("--- Етап 1: Збір даних (паралельно) ---")
+        # work.ua (вакансії+резюме) + DOU + robota.ua → staging; LLM-обробка на етапі 2.
+        # Лишаємо лише джерела з повними полями (ЗП/досвід/англ./гео/навички);
+        # структуровані job-борди без цих полів прибрано — вони псували статистику.
         await asyncio.gather(
             task_scrape_vacancies(),
             task_scrape_resumes(),
+            task_collect_dou(),
+            task_collect_robota(),
         )
 
         logger.info("--- Етап 2: NLP обробка (паралельно) ---")

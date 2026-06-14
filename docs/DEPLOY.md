@@ -330,38 +330,24 @@ sudo journalctl -u 503work-etl -e
 
 ### 7.1. Щоденний dump
 
-```bash
-mkdir -p ~/backups
-nano ~/backup-db.sh
-```
+У репозиторії є готовий `backup.sh`: `pg_dump` через контейнер `db`, gzip,
+тримає 14 останніх дампів. Каталог призначення — змінна `BACKUP_DIR`
+(за замовчуванням `/data/backups`).
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TIMESTAMP=$(date +%F-%H%M)
-DEST=~/backups
-docker exec postgres_db pg_dump -U labor_market -d core_postgres -Fc \
-  > "$DEST/core_postgres-$TIMESTAMP.dump"
-
-# Залишити останні 14 днів
-find "$DEST" -name 'core_postgres-*.dump' -mtime +14 -delete
-```
-
-```bash
-chmod +x ~/backup-db.sh
 crontab -e
 ```
 
 ```cron
 # Бекап щодня о 02:30 (до ETL)
-30 2 * * * /home/deploy/backup-db.sh >> /var/log/503work-backup.log 2>&1
+30 2 * * * BACKUP_DIR=/home/deploy/backups /home/deploy/503work/backup.sh >> /var/log/503work-backup.log 2>&1
 ```
 
 ### 7.2. Відновлення
 
 ```bash
-docker exec -i postgres_db pg_restore -U labor_market -d core_postgres --clean \
-  < ~/backups/core_postgres-2026-05-19-0230.dump
+gunzip -c ~/backups/503work_<TIMESTAMP>.sql.gz | \
+  docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
 ```
 
 ### 7.3. Off-site (рекомендовано)
@@ -533,8 +519,8 @@ docker compose build api frontend && docker compose up -d api frontend
 # Ручний ETL
 docker compose run --rm etl_worker
 
-# Бекап БД
-docker exec postgres_db pg_dump -U labor_market core_postgres -Fc > backup.dump
+# Бекап БД (gzip, тримає 14 останніх; BACKUP_DIR за замовчуванням /data/backups)
+./backup.sh
 
 # Підключитись до БД
 docker exec -it postgres_db psql -U labor_market -d core_postgres

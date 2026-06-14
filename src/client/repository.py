@@ -116,6 +116,14 @@ class VacancyRepository:
         if filters.get("english_level"):
             params.append(filters["english_level"])
             clauses.append(f"v.english_level = ${len(params)}")
+        if filters.get("source"):
+            params.append(filters["source"])
+            clauses.append(
+                f"""EXISTS (
+                    SELECT 1 FROM dictionaries.sources src
+                    WHERE src.id = v.source_id AND src.name = ${len(params)}
+                )"""
+            )
 
         return clauses, params
 
@@ -201,5 +209,13 @@ class ResumeRepository:
         if filters.get("english_level"):
             params.append(filters["english_level"])
             clauses.append(f"r.english_level = ${len(params)}")
+        if filters.get("source"):
+            params.append(filters["source"])
+            clauses.append(
+                f"""EXISTS (
+                    SELECT 1 FROM dictionaries.sources src
+                    WHERE src.id = r.source_id AND src.name = ${len(params)}
+                )"""
+            )
 
         return clauses, params

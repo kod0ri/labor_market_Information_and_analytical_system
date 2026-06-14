@@ -5,15 +5,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.db.database import AsyncDatabasePool
-from src.api.routes import analytics, health
+from src.api.routes import analytics, health, tracking
+from src.auth.bootstrap import init_auth
 from src.auth.router import router as auth_router
+from src.auth.security import get_secret_key
 from src.admin.router import router as admin_router
 from src.client.router import router as client_router
+from src.tracking.bootstrap import ensure_tracking_schema
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail fast: без валідного JWT_SECRET застосунок не повинен стартувати.
+    get_secret_key()
     await AsyncDatabasePool.initialize()
+    await init_auth()  # створює схему auth + засіває адміна з env
+    await ensure_tracking_schema()  # таблиця analytics.visits
     yield
     await AsyncDatabasePool.close_all()
 
@@ -47,6 +54,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router, tags=["System"])
+app.include_router(tracking.router, prefix="/api", tags=["Tracking"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])

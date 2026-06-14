@@ -11,7 +11,16 @@ LSP (Liskov Substitution Principle): усі конкретні класи мож
 на будь-яку іншу реалізацію свого протоколу без зміни поведінки системи.
 """
 
+import os
+import shutil
+import time
 from typing import Any
+
+from src.auth.repository import UserRepository
+from src.tracking.repository import VisitRepository
+
+# Час старту процесу — для метрики uptime застосунку.
+_PROCESS_STARTED_AT = time.time()
 
 
 class StatsService:
@@ -158,5 +167,82 @@ class PipelineService:
                     if last_resume_row
                     else None
                 ),
+            },
+        }
+
+
+class SystemService:
+    """
+    Метрики стану сервера та користувачів адмінпанелі.
+
+    SRP: лише збір рантайм-метрик (диск, память, навантаження, розмір БД)
+    та зведення по користувачах. Серверні показники — зі стандартної
+    бібліотеки (shutil, os, /proc), без зовнішніх залежностей.
+    """
+
+    # Шлях, по якому рахуємо зайнятість диска (том з даними/бекапами).
+    _DISK_PATH = os.getenv("METRICS_DISK_PATH", "/")
+
+    @staticmethod
+    def _disk() -> dict[str, Any]:
+        usage = shutil.disk_usage(SystemService._DISK_PATH)
+        percent = round(usage.used / usage.total * 100, 1) if usage.total else 0.0
+        return {
+            "path": SystemService._DISK_PATH,
+            "total_bytes": usage.total,
+            "used_bytes": usage.used,
+            "free_bytes": usage.free,
+            "used_percent": percent,
+        }
+
+    @staticmethod
+    def _memory() -> dict[str, Any] | None:
+        """Память з /proc/meminfo (Linux). На інших ОС повертає None."""
+        try:
+            info: dict[str, int] = {}
+            with open("/proc/meminfo", encoding="ascii") as fh:
+                for line in fh:
+                    key, _, rest = line.partition(":")
+                    info[key] = int(rest.strip().split()[0]) * 1024  # kB → bytes
+            total = info.get("MemTotal", 0)
+            available = info.get("MemAvailable", info.get("MemFree", 0))
+            used = total - available
+            percent = round(used / total * 100, 1) if total else 0.0
+            return {
+                "total_bytes": total,
+                "used_bytes": used,
+                "available_bytes": available,
+                "used_percent": percent,
+            }
+        except (OSError, ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _load() -> dict[str, float] | None:
+        try:
+            one, five, fifteen = os.getloadavg()
+            return {"1m": round(one, 2), "5m": round(five, 2), "15m": round(fifteen, 2)}
+        except (OSError, AttributeError):
+            return None
+
+    async def get_system_metrics(self, conn: Any) -> dict[str, Any]:
+        db_size_bytes = await conn.fetchval("SELECT pg_database_size(current_database())")
+        user_counts = await UserRepository.counts(conn)
+        users = await UserRepository.list_all(conn)
+        visitors = await VisitRepository.metrics(conn)
+
+        return {
+            "visitors": visitors,
+            "users": {
+                **user_counts,
+                "list": users,
+            },
+            "server": {
+                "uptime_seconds": int(time.time() - _PROCESS_STARTED_AT),
+                "disk": self._disk(),
+                "memory": self._memory(),
+                "load_average": self._load(),
+                "database_size_bytes": db_size_bytes,
+                "cpu_count": os.cpu_count(),
             },
         }

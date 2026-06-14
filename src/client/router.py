@@ -24,10 +24,11 @@ async def search_vacancies(
     min_salary_usd: Optional[int] = Query(default=None, description="Мінімальна зарплата USD"),
     experience_max: Optional[int] = Query(default=None, description="Максимальний досвід (роки)"),
     english_level: Optional[str] = Query(default=None, description="Рівень англійської, напр. Intermediate"),
+    source: Optional[str] = Query(default=None, description="Джерело, напр. work.ua"),
 ) -> dict:
     """
     Пошук вакансій з підтримкою фільтрів за навичками, локацією,
-    зарплатою, досвідом та рівнем англійської.
+    зарплатою, досвідом, рівнем англійської та джерелом.
     Використовує Strategy + Factory + Repository + Facade.
     """
     facade = get_market_facade()
@@ -39,6 +40,7 @@ async def search_vacancies(
             location=location,
             skill=skill,
             english_level=english_level,
+            source=source,
             page=page,
             page_size=page_size,
         )
@@ -53,6 +55,7 @@ async def search_resumes(
     min_salary_usd: Optional[int] = Query(default=None, description="Мінімальна зарплата USD"),
     experience_min: Optional[int] = Query(default=None, description="Мінімальний досвід (роки)"),
     english_level: Optional[str] = Query(default=None, description="Рівень англійської, напр. Upper-Intermediate"),
+    source: Optional[str] = Query(default=None, description="Джерело, напр. work.ua"),
 ) -> dict:
     """
     Пошук резюме з підтримкою фільтрів.
@@ -67,6 +70,7 @@ async def search_resumes(
             location=location,
             skill=skill,
             english_level=english_level,
+            source=source,
             page=page,
             page_size=page_size,
         )

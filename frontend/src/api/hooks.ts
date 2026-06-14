@@ -20,6 +20,8 @@ import type {
   SkillCategory,
   SkillGap,
   SkillStat,
+  SourceStat,
+  SystemMetrics,
 } from './types'
 
 export function useHealth() {
@@ -121,6 +123,14 @@ export function useTopCompanies(limit = 10) {
   })
 }
 
+export function useSources() {
+  return useQuery({
+    queryKey: ['sources'],
+    queryFn: () => apiGet<SourceStat[]>('/api/analytics/sources'),
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
 // ── Admin subsystem hooks ────────────────────────────────────────────────────
 
 export function useAdminStats() {
@@ -136,6 +146,16 @@ export function usePipelineStatus() {
     queryKey: ['admin-pipeline'],
     queryFn: () => apiGet<PipelineStatus>('/api/admin/pipeline/status'),
     staleTime: 30 * 1000,
+  })
+}
+
+export function useSystemMetrics(enabled = true) {
+  return useQuery({
+    queryKey: ['admin-system'],
+    queryFn: () => apiGet<SystemMetrics>('/api/admin/system'),
+    enabled,
+    staleTime: 15 * 1000,
+    refetchInterval: 30 * 1000, // тримаємо «онлайн» актуальним
   })
 }
 
