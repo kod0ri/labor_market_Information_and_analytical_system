@@ -14,30 +14,30 @@ export function KpiCard({
   accent?: boolean
 }) {
   return (
-    <div
-      className={`card card-pad relative overflow-hidden ${
-        accent ? 'ring-1 ring-brand-500/30' : ''
-      }`}
-    >
-      <div className="flex items-start justify-between">
-        <div className="text-xs font-medium uppercase tracking-wider muted">{label}</div>
+    <div className="card card-pad relative overflow-hidden">
+      <div className="flex items-start justify-between gap-2">
+        <div className="t-label">{label}</div>
         {icon && (
           <div
-            className={`grid h-9 w-9 place-items-center rounded-lg ${
-              accent
-                ? 'bg-brand-500/15 text-brand-500'
-                : 'bg-[var(--card-border)]/60 muted'
-            }`}
+            className="grid h-8 w-8 shrink-0 place-items-center border"
+            style={{
+              borderRadius: 2,
+              borderColor: accent ? 'var(--brand)' : 'var(--card-border)',
+              color: accent ? 'var(--brand)' : 'var(--muted-fg)',
+              background: accent ? 'var(--brand-soft)' : 'transparent',
+            }}
           >
             {icon}
           </div>
         )}
       </div>
-      <div className="mt-3 text-3xl font-extrabold tracking-tight">{value}</div>
-      {hint && <div className="muted mt-1 text-xs">{hint}</div>}
-      {accent && (
-        <div className="pointer-events-none absolute -bottom-12 -right-12 h-32 w-32 rounded-full bg-brand-500/15 blur-2xl" />
-      )}
+      <div
+        className={`num mt-3 text-2xl font-bold tracking-tight sm:text-3xl ${accent ? 'caret' : ''}`}
+        style={accent ? { color: 'var(--brand)' } : undefined}
+      >
+        {value}
+      </div>
+      {hint && <div className="muted mt-1 font-mono text-[11px]">{hint}</div>}
     </div>
   )
 }

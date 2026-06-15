@@ -1,32 +1,37 @@
 """
-Token Bucket Rate Limiter + GroqBudget для Groq API.
+Token Bucket Rate Limiter + DailyBudget для безкоштовних LLM-провайдерів.
 
-llama-4-scout-17b (free tier): RPM=30, RPD=1K, TPM=30K, TPD=500K
-    ~845 tokens/запит (685 in + 160 out) → max 35 запитів/хв по TPM
-    Безпечний combined rate (2 модулі паралельно): 20 запитів/хв → 0.16 req/s кожен
-
-GroqBudget відстежує денні ліміти (TPD, RPD) і зупиняє обробку
-до того як пайплайн почне масово отримувати 429.
+DailyBudget відстежує денні ліміти (TPD — tokens/day, RPD — requests/day)
+конкретного провайдера й зупиняє обробку до того, як пайплайн почне масово
+отримувати 429. Кожен провайдер у каскаді (див. llm_cascade.py) має власний
+екземпляр DailyBudget зі своїми лімітами.
 """
 
 import asyncio
 import time
 
 
-class GroqBudget:
+class DailyBudget:
     """
-    Shared singleton для відстеження денних лімітів Groq API.
+    Відстежує денні ліміти одного LLM-провайдера (TPD + RPD).
 
-    llama-4-scout-17b free tier: TPD=500K токенів, RPD=1K запитів.
-    Обидва nlp_vacancies і nlp_resumes імпортують один екземпляр GROQ_BUDGET.
-    Зупиняє обробку при 96% від ліміту щоб уникнути 429 в кінці пайплайну.
+    Зупиняє обробку при `stop_ratio` (типово 96%) від ліміту, щоб уникнути
+    хвилі 429 у кінці доби. Спільний екземпляр на провайдера — і nlp_vacancies,
+    і nlp_resumes рахують у той самий бюджет через каскад.
     """
-    TPD_LIMIT = 500_000
-    RPD_LIMIT = 1_000
-    _TPD_STOP_AT = int(TPD_LIMIT * 0.96)   # 480K
-    _RPD_STOP_AT = int(RPD_LIMIT * 0.96)   # 960
 
-    def __init__(self):
+    def __init__(
+        self,
+        name: str,
+        tpd_limit: int,
+        rpd_limit: int,
+        stop_ratio: float = 0.96,
+    ):
+        self.name = name
+        self.tpd_limit = tpd_limit
+        self.rpd_limit = rpd_limit
+        self._tpd_stop_at = int(tpd_limit * stop_ratio)
+        self._rpd_stop_at = int(rpd_limit * stop_ratio)
         self._tokens = 0
         self._requests = 0
         self._lock = asyncio.Lock()
@@ -39,19 +44,16 @@ class GroqBudget:
     def is_exhausted(self, estimated_tokens: int = 850) -> bool:
         """Перевіряє чи безпечно робити ще один запит (без Lock — читання stale ок)."""
         return (
-            self._tokens + estimated_tokens >= self._TPD_STOP_AT
-            or self._requests >= self._RPD_STOP_AT
+            self._tokens + estimated_tokens >= self._tpd_stop_at
+            or self._requests >= self._rpd_stop_at
         )
 
     @property
     def summary(self) -> str:
         return (
-            f"tokens {self._tokens:,}/{self.TPD_LIMIT:,} "
-            f"| requests {self._requests}/{self.RPD_LIMIT}"
+            f"{self.name}: {self._tokens:,}/{self.tpd_limit:,} tok "
+            f"| {self._requests}/{self.rpd_limit:,} req"
         )
-
-
-GROQ_BUDGET = GroqBudget()
 
 
 class TokenBucketRateLimiter:

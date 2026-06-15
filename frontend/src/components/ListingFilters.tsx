@@ -6,6 +6,7 @@ export interface ListingFilterValues {
   location: string
   minSalary: string
   experience: string
+  source: string
 }
 
 const EMPTY: ListingFilterValues = {
@@ -13,6 +14,7 @@ const EMPTY: ListingFilterValues = {
   location: '',
   minSalary: '',
   experience: '',
+  source: '',
 }
 
 function useDebounced<T>(value: T, delay = 400): T {
@@ -31,6 +33,7 @@ export function useListingFilters() {
     location: useDebounced(values.location),
     minSalary: useDebounced(values.minSalary),
     experience: useDebounced(values.experience),
+    source: values.source, // select — застосовуємо одразу, без debounce
   }
   return {
     values,
@@ -45,11 +48,13 @@ export function ListingFiltersCard({
   onChange,
   onReset,
   experienceHint,
+  sources,
 }: {
   values: ListingFilterValues
   onChange: (v: ListingFilterValues) => void
   onReset: () => void
   experienceHint?: string
+  sources?: string[]
 }) {
   function set<K extends keyof ListingFilterValues>(key: K, val: string) {
     onChange({ ...values, [key]: val })
@@ -101,6 +106,22 @@ export function ListingFiltersCard({
             onChange={(e) => set('experience', e.target.value)}
           />
         </Field>
+        {sources && sources.length > 0 && (
+          <Field label="Джерело">
+            <select
+              className="input"
+              value={values.source}
+              onChange={(e) => set('source', e.target.value)}
+            >
+              <option value="">Усі джерела</option>
+              {sources.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
     </Card>
   )

@@ -1,20 +1,34 @@
-import os
-from datetime import datetime, timedelta, timezone
+"""
+Автентифікація — FastAPI маршрути.
 
-import jwt
+Вхід перевіряється проти таблиці auth.users (пароль — лише хеш, звірка
+constant-time). Захардкоджений env-акаунт більше не порівнюється у відкритому
+вигляді: він засівається у БД як адмін на старті (src/auth/bootstrap.py).
+
+Публічної реєстрації немає — користувачів заводить адмін через CLI
+(scripts/create_user.py). Тому тут лише login та me.
+"""
+
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-SECRET_KEY = os.getenv("JWT_SECRET", "labor-market-secret-key-change-in-prod")
-ALGORITHM = "HS256"
-TOKEN_EXPIRE_HOURS = 24
-
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
+from src.api.ratelimit import rate_limiter
+from src.auth.repository import UserRepository
+from src.auth.security import (
+    CurrentUser,
+    create_token,
+    get_current_user,
+    verify_password,
+)
+from src.db.database import AsyncDatabasePool
 
 router = APIRouter()
-_bearer = HTTPBearer()
+
+# Захист від перебору паролів на відкритому домені. 10 спроб/хв на IP —
+# з запасом для людини, але неприйнятно мало для брутфорсу.
+_LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "10"))
 
 
 class LoginRequest(BaseModel):
@@ -25,33 +39,32 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    username: str
 
 
-def create_token(username: str) -> str:
-    payload = {
-        "sub": username,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS),
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload["sub"]
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limiter(_LOGIN_RATE_LIMIT, 60))],
+)
 async def login(body: LoginRequest):
-    if body.username != ADMIN_USERNAME or body.password != ADMIN_PASSWORD:
+    async with AsyncDatabasePool.get_connection() as conn:
+        user = await UserRepository.get_by_username(conn, body.username)
+
+    # Звіряємо хеш навіть за відсутності користувача — щоб час відповіді
+    # не залежав від того, чи існує логін (захист від user enumeration).
+    stored_hash = user["password_hash"] if user else (
+        "pbkdf2_sha256$600000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
+    password_ok = verify_password(body.password, stored_hash)
+
+    if user is None or not user["is_active"] or not password_ok:
         raise HTTPException(status_code=401, detail="Невірний логін або пароль")
-    return TokenResponse(access_token=create_token(body.username))
+
+    token = create_token(user_id=user["id"], username=user["username"])
+    return TokenResponse(access_token=token, username=user["username"])
 
 
 @router.get("/me")
-async def me(username: str = Depends(verify_token)):
-    return {"username": username}
+async def me(user: CurrentUser = Depends(get_current_user)):
+    return {"id": user.id, "username": user.username}

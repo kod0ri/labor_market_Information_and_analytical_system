@@ -3,23 +3,32 @@ import json
 import re
 import asyncio
 from pydantic import ValidationError
-from groq import AsyncGroq
 from dotenv import load_dotenv
 
 from src.db.database import AsyncDatabasePool
 from src.processor.schemas import VacancySchema
 from src.processor.skill_normalizer import resolve_skill_id
 from src.processor.failure_tracker import record_failure, mark_resolved
-from src.processor.rate_limiter import TokenBucketRateLimiter, GROQ_BUDGET
-from src.processor.llm_utils import _parse_retry_after, prepare_text_for_llm, get_or_create_location, get_or_create_source
+from src.processor.llm_cascade import (
+    complete,
+    any_available,
+    budget_summary,
+    cascade_summary,
+    AllProvidersExhausted,
+    AllProvidersBusy,
+)
+from src.processor.llm_utils import (
+    prepare_text_for_llm,
+    get_or_create_company,
+    get_or_create_location,
+    get_or_create_source,
+)
 
 load_dotenv()
-client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
-# Prefect запускає nlp_vacancies і nlp_resumes паралельно.
-# Кожен модуль має власний limiter → combined rate = 2 × N.
-# Groq llama-4-scout-17b: 30 RPM. Безпечний combined: 20 RPM → 10 RPM кожен → 0.16 req/s.
-GROQ_RATE_LIMITER = TokenBucketRateLimiter(rate_per_second=0.16, burst=1)
+# Скільки записів за один прогін (vacancies + resumes беруть по стільки кожен).
+# Підвищуй під частоту cron, щоб вибирати денну стелю провайдерів.
+BATCH_LIMIT = int(os.getenv("NLP_BATCH_LIMIT", "200"))
 
 SYSTEM_INSTRUCTION = """
 Ти професійний IT-аналітик та Data Engineer. Твоє завдання: проаналізувати текст вакансії.
@@ -46,48 +55,15 @@ SYSTEM_INSTRUCTION = """
 """
 
 
-async def get_or_create_company(
-    conn, name: str | None, industry: str | None,
-    website: str | None, cache: dict, cache_lock: asyncio.Lock,
-) -> int | None:
-    if not name:
-        return None
-    name = name[:200]
-
-    async with cache_lock:
-        if name in cache["companies"]:
-            return cache["companies"][name]
-
-    comp_id = await conn.fetchval(
-        """
-        INSERT INTO dictionaries.companies (name, industry, website_url)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (name) DO UPDATE
-            SET industry    = COALESCE(dictionaries.companies.industry, EXCLUDED.industry),
-                website_url = COALESCE(dictionaries.companies.website_url, EXCLUDED.website_url)
-        RETURNING id;
-        """,
-        name, industry, website,
-    )
-    if not comp_id:
-        comp_id = await conn.fetchval(
-            "SELECT id FROM dictionaries.companies WHERE name = $1;", name
-        )
-
-    async with cache_lock:
-        cache["companies"][name] = comp_id
-    return comp_id
-
-
 async def process_single_vacancy(
     record, cache: dict, cache_lock: asyncio.Lock,
-    rate_limiter: TokenBucketRateLimiter, db_semaphore: asyncio.Semaphore,
+    db_semaphore: asyncio.Semaphore,
 ) -> bool:
     staging_id = record["id"]
     source_name = record["source_name"]
 
-    if GROQ_BUDGET.is_exhausted():
-        print(f"   ⏸️ [ID {staging_id}] Groq TPD/RPD budget вичерпано ({GROQ_BUDGET.summary}), пропускаємо.")
+    if not any_available():
+        print(f"   ⏸️ [ID {staging_id}] LLM-бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
         return False
 
     raw_html = record["raw_html"]
@@ -104,32 +80,16 @@ async def process_single_vacancy(
 
     safe_text = await prepare_text_for_llm(raw_html)
     prompt = f"Текст вакансії:\n{safe_text}\n\nВказана зарплата: {raw_salary}"
+    messages = [
+        {"role": "system", "content": SYSTEM_INSTRUCTION},
+        {"role": "user", "content": prompt},
+    ]
 
     max_attempts = 3
+    transient_busy = False
     for attempt in range(max_attempts):
         try:
-            await rate_limiter.acquire()
-
-            if GROQ_BUDGET.is_exhausted():
-                print(f"   ⏸️ [ID {staging_id}] Budget вичерпано після очікування, пропускаємо.")
-                return False
-
-            chat_completion = await client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": SYSTEM_INSTRUCTION},
-                    {"role": "user", "content": prompt},
-                ],
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                temperature=0,
-                response_format={"type": "json_object"},
-            )
-
-            if chat_completion.usage:
-                await GROQ_BUDGET.record(chat_completion.usage.total_tokens)
-
-            response_text = chat_completion.choices[0].message.content
-            if not response_text:
-                raise ValueError("Порожня відповідь від LLM")
+            response_text, provider, model = await complete(messages)
 
             match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if not match:
@@ -182,10 +142,20 @@ async def process_single_vacancy(
                         )
                         await mark_resolved(conn, "vacancy", staging_id)
 
-            print(f"   💾 Успішно: [ID {staging_id}] {str(title)[:35]}...")
+            print(f"   💾 Успішно [{provider}/{model}]: [ID {staging_id}] {str(title)[:35]}...")
             return True
 
+        except AllProvidersExhausted:
+            print(f"   ⏸️ [ID {staging_id}] Бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
+            return False
+
+        except AllProvidersBusy as e:
+            transient_busy = True
+            print(f"   ⏳ [ID {staging_id}] Усі провайдери зайняті (спроба {attempt + 1}/{max_attempts}). Чекаємо {e.retry_after:.1f}s...")
+            await asyncio.sleep(e.retry_after)
+
         except ValidationError as ve:
+            transient_busy = False
             failed_fields = [str(e.get("loc", [""])[0]) for e in ve.errors()]
             detail = f"fields={failed_fields}"
             print(f"   ⚠️ [ID {staging_id}] Галюцинація LLM (спроба {attempt + 1}/{max_attempts}). {detail}")
@@ -196,16 +166,17 @@ async def process_single_vacancy(
             await asyncio.sleep(1)
 
         except Exception as e:
-            if "429" in str(e) or "rate_limit" in str(e).lower():
-                wait = _parse_retry_after(e)
-                print(f"   ⏳ [ID {staging_id}] Rate limit (спроба {attempt + 1}/{max_attempts}). Чекаємо {wait:.1f}s...")
-                await asyncio.sleep(wait)
-            else:
-                print(f"   ❌ [ID {staging_id}] Помилка: {e}")
-                async with db_semaphore:
-                    async with AsyncDatabasePool.get_connection() as conn:
-                        await record_failure(conn, "vacancy", staging_id, "unknown", str(e), attempt + 1)
-                return False
+            print(f"   ❌ [ID {staging_id}] Помилка: {e}")
+            async with db_semaphore:
+                async with AsyncDatabasePool.get_connection() as conn:
+                    await record_failure(conn, "vacancy", staging_id, "unknown", str(e), attempt + 1)
+            return False
+
+    # Вичерпали спроби лише через rate-limit — НЕ фіксуємо провал,
+    # лишаємо запис у staging на наступний прогін.
+    if transient_busy:
+        print(f"   ⏸️ [ID {staging_id}] Ліміти провайдерів — відкладаємо на наступний прогін.")
+        return False
 
     print(f"   💀 [ID {staging_id}] Вичерпано {max_attempts} спроби.")
     async with db_semaphore:
@@ -221,42 +192,76 @@ async def main() -> None:
     await AsyncDatabasePool.initialize()
     cache = {"companies": {}, "locations": {}, "skills": {}, "sources": {}}
     cache_lock = asyncio.Lock()
-    rate_limiter = GROQ_RATE_LIMITER
     db_semaphore = asyncio.Semaphore(15)
 
-    async with AsyncDatabasePool.get_connection() as conn:
-        records = await conn.fetch(
-            """
-            SELECT s.id, s.source_name, s.external_id, s.raw_html, s.raw_json
-            FROM staging.raw_vacancies s
-            LEFT JOIN core.vacancies c ON s.id = c.staging_id
-            LEFT JOIN staging.failed_records f
-                   ON f.staging_id  = s.id
-                  AND f.record_type = 'vacancy'
-                  AND f.is_resolved = FALSE
-            WHERE s.raw_html IS NOT NULL
-              AND s.raw_html != ''
-              AND c.id IS NULL
-              AND f.id IS NULL
-            LIMIT 100;
-            """
+    print(f"🚀 Обробка вакансій (LLM-каскад: {cascade_summary()})...")
+    total_success = total_fail = 0
+    batch_no = 0
+    no_progress = 0
+
+    # Drain-режим: кожен прогін доганяє до стелі — батчі по BATCH_LIMIT, поки
+    # черга не спорожніє або денний бюджет усіх провайдерів не вичерпається.
+    while True:
+        if not any_available():
+            print(f"   ⏹️ Денний бюджет провайдерів вичерпано ({budget_summary()}).")
+            break
+
+        async with AsyncDatabasePool.get_connection() as conn:
+            records = await conn.fetch(
+                """
+                -- Round-robin по джерелах: беремо найстарший необроблений запис
+                -- кожного source_name по черзі (rn=1 усіх джерел, потім rn=2…).
+                -- Без цього heap-порядок віддавав би увесь беклог work.ua першим,
+                -- і DOU/robota «голодували» б за денним бюджетом каскаду.
+                SELECT id, source_name, external_id, raw_html, raw_json
+                FROM (
+                    SELECT s.id, s.source_name, s.external_id, s.raw_html, s.raw_json,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY s.source_name ORDER BY s.id
+                           ) AS rn
+                    FROM staging.raw_vacancies s
+                    LEFT JOIN core.vacancies c ON s.id = c.staging_id
+                    LEFT JOIN staging.failed_records f
+                           ON f.staging_id  = s.id
+                          AND f.record_type = 'vacancy'
+                          AND f.is_resolved = FALSE
+                    WHERE s.raw_html IS NOT NULL
+                      AND s.raw_html != ''
+                      AND c.id IS NULL
+                      AND f.id IS NULL
+                ) q
+                ORDER BY q.rn, q.source_name
+                LIMIT $1;
+                """,
+                BATCH_LIMIT,
+            )
+
+        if not records:
+            print("   ✅ Черга вакансій порожня." if batch_no else "⚠️ Немає нових вакансій для обробки.")
+            break
+
+        batch_no += 1
+        print(f"   📦 Батч {batch_no}: {len(records)} вакансій...")
+        results = await asyncio.gather(
+            *[process_single_vacancy(r, cache, cache_lock, db_semaphore) for r in records],
+            return_exceptions=True,
         )
+        success = sum(1 for r in results if r is True)
+        total_success += success
+        total_fail += len(results) - success
 
-    if not records:
-        print("⚠️ Немає нових вакансій для обробки.")
-        return
+        # Захист від «вхолосту»: два батчі поспіль без жодного успіху (усі в
+        # cooldown) → стоп, добере наступний прогін.
+        if success == 0:
+            no_progress += 1
+            if no_progress >= 2:
+                print("   ⏹️ Два батчі без прогресу — зупиняємось до наступного прогону.")
+                break
+        else:
+            no_progress = 0
 
-    print(
-        f"🚀 Старт обробки {len(records)} вакансій "
-        f"(llama-4-scout, ~10 запитів/хв, орієнтовно {len(records) // 10 + 1} хв)..."
-    )
-    results = await asyncio.gather(
-        *[process_single_vacancy(r, cache, cache_lock, rate_limiter, db_semaphore) for r in records],
-        return_exceptions=True,
-    )
-    success = sum(1 for r in results if r is True)
-    print(f"\n📊 Результат: ✅ {success} успішно, ❌ {len(results) - success} помилок.")
-    print(f"📈 Groq budget: {GROQ_BUDGET.summary}")
+    print(f"\n📊 Вакансії: ✅ {total_success} успішно, ❌ {total_fail} помилок ({batch_no} батч(ів)).")
+    print(f"📈 LLM budget: {budget_summary()}")
 
 
 if __name__ == "__main__":

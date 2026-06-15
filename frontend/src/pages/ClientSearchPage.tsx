@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useClientResumes, useClientVacancies } from '../api/hooks'
+import { useClientResumes, useClientVacancies, useSources } from '../api/hooks'
 import type { ClientSearchFilters } from '../api/types'
 import { Card } from '../components/Card'
 import { ListingFiltersCard, useListingFilters } from '../components/ListingFilters'
@@ -22,10 +22,12 @@ export default function ClientSearchPage() {
   const { values, setValues, debounced, reset } = useListingFilters()
   const [englishLevel, setEnglishLevel] = useState('')
   const [page, setPage] = useState(1)
+  const sourcesQuery = useSources()
+  const sourceNames = sourcesQuery.data?.map((s) => s.source) ?? []
 
   useEffect(() => {
     setPage(1)
-  }, [debounced.skill, debounced.location, debounced.minSalary, debounced.experience, englishLevel, mode])
+  }, [debounced.skill, debounced.location, debounced.minSalary, debounced.experience, debounced.source, englishLevel, mode])
 
   const baseFilters: ClientSearchFilters = {
     page,
@@ -34,6 +36,7 @@ export default function ClientSearchPage() {
     location: debounced.location.trim() || undefined,
     min_salary_usd: debounced.minSalary ? Number(debounced.minSalary) : undefined,
     english_level: englishLevel || undefined,
+    source: debounced.source || undefined,
   }
 
   const vacancyFilters: ClientSearchFilters = {
@@ -86,6 +89,7 @@ export default function ClientSearchPage() {
               setPage(1)
             }}
             experienceHint={mode === 'vacancies' ? 'Досвід не більше (років)' : 'Досвід не менше (років)'}
+            sources={sourceNames}
           />
 
           <Card title="Рівень англійської">
@@ -126,7 +130,45 @@ export default function ClientSearchPage() {
             </Card>
           ) : (
             <>
-              <Card className="!p-0 overflow-hidden">
+              {/* мобайл: картки замість таблиці */}
+              <div className="space-y-3 md:hidden">
+                {query.data.items.map((item) => (
+                  <div key={item.id} className="card p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 font-semibold leading-snug">{item.title}</div>
+                      <div className="num shrink-0 text-sm font-bold" style={{ color: 'var(--brand)' }}>
+                        {formatSalaryRange(item.min_salary_usd_eq, item.max_salary_usd_eq)}
+                      </div>
+                    </div>
+                    {mode === 'vacancies' && 'company_name' in item &&
+                      (item as { company_name?: string | null }).company_name && (
+                        <div className="muted mt-0.5 truncate text-xs">
+                          {(item as { company_name?: string | null }).company_name}
+                        </div>
+                      )}
+                    <div className="muted mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
+                      <span>{item.city_name ?? '—'}</span>
+                      <span>
+                        досвід: {item.experience_years !== null ? `${item.experience_years} р.` : '—'}
+                      </span>
+                      <span>eng: {item.english_level ?? '—'}</span>
+                      <span>{formatDate(item.created_at)}</span>
+                    </div>
+                    {item.skills.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {item.skills.slice(0, 5).map((s) => (
+                          <span key={s} className="chip">{s}</span>
+                        ))}
+                        {item.skills.length > 5 && (
+                          <span className="chip">+{item.skills.length - 5}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <Card className="!p-0 hidden overflow-hidden md:block">
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[700px] text-sm">
                     <thead className="border-b border-[var(--card-border)] text-left text-xs uppercase tracking-wider muted">

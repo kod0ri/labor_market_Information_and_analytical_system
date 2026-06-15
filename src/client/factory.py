@@ -19,6 +19,7 @@ from src.client.filters import (
     LocationFilterStrategy,
     SkillFilterStrategy,
     EnglishLevelFilterStrategy,
+    SourceFilterStrategy,
     CompositeFilterStrategy,
 )
 
@@ -38,6 +39,7 @@ class FilterStrategyFactory:
         location: str | None = None,
         skill: str | None = None,
         english_level: str | None = None,
+        source: str | None = None,
     ) -> CompositeFilterStrategy:
         strategies: list[IFilterStrategy] = []
 
@@ -51,6 +53,8 @@ class FilterStrategyFactory:
             strategies.append(SkillFilterStrategy(skill_name=skill))
         if english_level:
             strategies.append(EnglishLevelFilterStrategy(level=english_level))
+        if source:
+            strategies.append(SourceFilterStrategy(source=source))
 
         return CompositeFilterStrategy(strategies)
 
@@ -61,6 +65,7 @@ class FilterStrategyFactory:
         location: str | None = None,
         skill: str | None = None,
         english_level: str | None = None,
+        source: str | None = None,
     ) -> CompositeFilterStrategy:
         strategies: list[IFilterStrategy] = []
 
@@ -75,5 +80,7 @@ class FilterStrategyFactory:
             strategies.append(SkillFilterStrategy(skill_name=skill))
         if english_level:
             strategies.append(EnglishLevelFilterStrategy(level=english_level))
+        if source:
+            strategies.append(SourceFilterStrategy(source=source))
 
         return CompositeFilterStrategy(strategies)

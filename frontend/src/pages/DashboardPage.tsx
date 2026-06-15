@@ -8,6 +8,7 @@ import { ExperienceChart } from '../components/charts/ExperienceChart'
 import { ExperienceTimelineChart } from '../components/charts/ExperienceTimelineChart'
 import { LocationsChart } from '../components/charts/LocationsChart'
 import { SalaryHistogram } from '../components/charts/SalaryHistogram'
+import { SourcesBreakdown } from '../components/charts/SourcesBreakdown'
 import { TopCompaniesChart } from '../components/charts/TopCompaniesChart'
 import { TopSkillsChart } from '../components/charts/TopSkillsChart'
 import { IconActivity, IconBriefcase, IconCoins, IconSparkles } from '../components/Icon'
@@ -38,7 +39,7 @@ export default function DashboardPage() {
       />
 
       {overview.isLoading ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="reveal reveal-1 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="card card-pad">
               <Loading rows={2} />
@@ -48,7 +49,7 @@ export default function DashboardPage() {
       ) : overview.isError ? (
         <ErrorState message="Перевірте чи запущений API на localhost:8000" />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="reveal reveal-1 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
             label="Вакансії"
             value={formatNumber(overview.data?.total_vacancies)}
@@ -75,7 +76,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+      <div className="reveal reveal-2 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Card
           className="xl:col-span-2"
           title="Активність ринку"
@@ -123,7 +124,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6">
+      <div className="reveal reveal-3 mt-6 grid grid-cols-1 gap-6">
         <Card
           title="Структура досвіду в часі"
           description="Як розподіляється попит на junior/middle/senior за період"
@@ -150,7 +151,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+      <div className="reveal reveal-4 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card title="Топ навичок" description="Найбільш популярні навички у вакансіях">
           <TopSkillsChart type="vacancy" limit={10} height={340} />
         </Card>
@@ -160,7 +161,13 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+      <div className="reveal reveal-4 mt-6 grid grid-cols-1 gap-6">
+        <Card title="Джерела даних" description="Вакансії та резюме за джерелом збору (work.ua, DOU, remote-борди тощо)">
+          <SourcesBreakdown height={320} />
+        </Card>
+      </div>
+
+      <div className="reveal reveal-5 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Card title="Досвід та зарплата" description="Кількість вакансій + середня ЗП по рівнях">
           <ExperienceChart type="vacancy" withSalary height={280} />
         </Card>
@@ -172,7 +179,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+      <div className="reveal reveal-6 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card title="Досвід кандидатів" description="Рівні досвіду у резюме та середня очікувана ЗП">
           <ExperienceChart type="resume" withSalary height={280} />
         </Card>

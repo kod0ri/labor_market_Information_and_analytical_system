@@ -8,7 +8,7 @@ export function ThemeToggle() {
       type="button"
       onClick={toggle}
       aria-label={theme === 'dark' ? 'Світла тема' : 'Темна тема'}
-      className="btn h-9 w-9 p-0"
+      className="btn h-10 w-10 p-0"
       title={theme === 'dark' ? 'Світла тема' : 'Темна тема'}
     >
       {theme === 'dark' ? <IconSun size={16} /> : <IconMoon size={16} />}

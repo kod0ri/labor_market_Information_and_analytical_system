@@ -18,6 +18,22 @@ export class ApiError extends Error {
   }
 }
 
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const url = resolveUrl(path)
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...authHeaders() },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    let message = res.statusText
+    const data = await res.json().catch(() => null) as { detail?: string } | null
+    if (data?.detail) message = data.detail
+    throw new ApiError(message, res.status)
+  }
+  return res.json() as Promise<T>
+}
+
 export async function apiPatch<T>(path: string): Promise<T> {
   const url = resolveUrl(path)
   const res = await fetch(url, {
