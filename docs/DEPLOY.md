@@ -2,6 +2,8 @@
 
 Покроковий гайд для розгортання системи на production-сервері. Найпрактичніший шлях — VPS + Docker Compose + nginx + Let's Encrypt.
 
+> **Версія:** 2.0.0 — збір з work.ua + DOU + robota.ua, NLP через каскад безкоштовних LLM (Cerebras → Groq → Gemini → Mistral). Достатньо одного LLM-ключа; `JWT_SECRET` обов'язковий.
+
 ---
 
 ## 1. Передумови
@@ -21,7 +23,9 @@
 
 - Зареєстрований домен (наприклад, `503work.example.com`)
 - DNS A-запис вашого домену на IP сервера
-- Робочий `GROQ_API_KEY` з [console.groq.com](https://console.groq.com)
+- Щонайменше **один** безкоштовний LLM-ключ для каскаду (рекомендовано Cerebras + Groq):
+  [cloud.cerebras.ai](https://cloud.cerebras.ai) · [console.groq.com](https://console.groq.com) ·
+  [aistudio.google.com](https://aistudio.google.com/apikey) · [console.mistral.ai](https://console.mistral.ai)
 - SSH-доступ до сервера як `root` або користувач з `sudo`
 
 ---
@@ -94,13 +98,21 @@ DB_NAME=core_postgres
 DB_HOST=db
 DB_PORT=5432
 
-# Groq для NLP
-GROQ_API_KEY=gsk_...
+# LLM-каскад для NLP — достатньо ХОЧА Б ОДНОГО ключа.
+# Порядок за замовчуванням: Cerebras → Groq → Gemini → Mistral.
+# Сумарна добова продуктивність = сума денних квот увімкнених провайдерів.
+CEREBRAS_API_KEY=csk_...                   # рекомендовано (1М ток/добу, без картки)
+GROQ_API_KEY=gsk_...                       # рекомендовано (500K ток/добу)
+GEMINI_API_KEY=                            # опційно (500 запитів/добу)
+MISTRAL_API_KEY=                           # опційно
+# LLM_PROVIDER_ORDER=cerebras,groq         # обмежити склад/порядок каскаду
+# NLP_BATCH_LIMIT=200                       # розмір порції drain-режиму
+# ROBOTA_MAX_PAGES=25                       # обсяг збору robota.ua за прогін
 
-# Адмін-панель
+# Адмін-панель (засів першого акаунта в auth.users)
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<сильний-пароль>            # openssl rand -base64 16
-JWT_SECRET=<випадковий-рядок>              # openssl rand -base64 32
+JWT_SECRET=<випадковий-рядок>              # ОБОВ'ЯЗКОВО: openssl rand -hex 32
 
 # pgAdmin — взагалі не запускай у production, або сильний пароль
 PGADMIN_EMAIL=admin@yourdomain.com
@@ -109,6 +121,9 @@ PGADMIN_PASSWORD=<сильний-пароль>
 # CORS — лише ваш фронтенд-домен
 CORS_ORIGINS=https://503work.example.com
 ```
+
+> **`JWT_SECRET` обов'язковий** — застосунок не стартує з порожнім або дефолтним значенням.
+> Додати ще адмін-акаунти після старту: `docker compose exec api python -m scripts.create_user --username NAME`.
 
 > Згенерувати пароль:
 > ```bash
@@ -496,7 +511,9 @@ Build command: `npm run build`. Output: `dist`. Env: `VITE_API_BASE_URL=https://
 | Фронт є, API повертає CORS-помилку | `CORS_ORIGINS` не оновлено | Додай прод-домен у `.env`, `docker compose restart api` |
 | Графіки порожні | ETL не запускався | `docker compose run --rm etl_worker` |
 | `avg_*_salary_usd: null` | currency_converter не пройшов | `docker compose run --rm etl_worker python src/processor/currency_converter.py` |
-| 429 від Groq у логах ETL | Rate limit | Норма, скрипт сам ретраїть |
+| `429` від LLM-провайдера у логах ETL | Rate limit | Норма — каскад остуджує провайдера й падає на наступного |
+| `НЕМАЄ ПРОВАЙДЕРІВ` у логах ETL | Не задано жодного LLM-ключа | Додай хоча б один `*_API_KEY` у `.env` і пересобери `etl_worker` |
+| Застосунок не стартує (скарга на `JWT_SECRET`) | Порожній/дефолтний секрет | `openssl rand -hex 32` → `.env` → `docker compose up -d api` |
 | `disk full` через `postgres_data` | Не очищено staging | `TRUNCATE staging.raw_*` у SQL після успішного запуску NLP |
 | Let's Encrypt не валідується | Порт 80 закритий або DNS не зрезолвлено | `ufw allow 80/tcp`, `dig 503work.example.com` |
 | SPA-роути 404 на refresh | Немає `try_files ... /index.html` у nginx | Перевір [п. 4.2](#42-конфіг) |
