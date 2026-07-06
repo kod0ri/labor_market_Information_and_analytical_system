@@ -75,6 +75,10 @@ services:
     build: ./frontend
     container_name: labor_market_frontend
     restart: always
+    ports:
+      # Лише локально/через reverse-proxy (Caddy у мережі homelab) — не світимо
+      # фронтенд (і його /api-проксі) у мережу відкритим HTTP в обхід TLS.
+      - "127.0.0.1:5173:80"
     depends_on:
       api:
         condition: service_healthy

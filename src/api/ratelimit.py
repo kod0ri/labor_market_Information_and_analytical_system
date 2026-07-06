@@ -6,11 +6,20 @@ Rate limiting по IP клієнта (sliding window, in-memory).
 (напр. Redis). Стан тримається в памʼяті, перевірка синхронна й виконується
 в event-loop без await між читанням і записом, тож блокування не потрібні.
 
-За реверс-проксі (Cloudflare → nginx) справжній IP береться із заголовків.
-Origin слухає лише локально (127.0.0.1:8000), тож ці заголовки ставить наш
-проксі, а не довільний клієнт.
+Визначення IP за реверс-проксі:
+    X-Forwarded-For — це список, до якого КОЖЕН проксі дописує IP свого
+    безпосереднього клієнта СПРАВА. Тому довіряти можна лише хвостовим
+    елементам, які додали НАШІ проксі; усе, що зліва, підконтрольне клієнту.
+    TRUSTED_PROXY_HOPS = скільки проксі стоять перед застосунком (Caddy+nginx=2).
+    Справжній IP клієнта = елемент на позиції -TRUSTED_PROXY_HOPS.
+
+    cf-connecting-ip НЕ використовується за замовчуванням: якщо перед нами не
+    справжній Cloudflare (який перезаписує цей заголовок), його може підробити
+    будь-який клієнт і повністю контролювати ключ лімітера. Увімкнути можна лише
+    свідомо через TRUST_CF_CONNECTING_IP=1 (коли трафік реально йде через CF).
 """
 
+import os
 import time
 from collections import defaultdict, deque
 
@@ -20,14 +29,28 @@ from fastapi import HTTPException, Request
 # щоб памʼять не росла безмежно під розподіленим навантаженням.
 _SWEEP_KEYS_THRESHOLD = 10_000
 
+# Скільки довірених проксі стоять перед застосунком. Кожен дописує один IP
+# у хвіст X-Forwarded-For. За замовчуванням 1 (лише локальний nginx); за схеми
+# Caddy → nginx постав 2. Значення 0 — ігнорувати XFF (брати peer-адресу).
+_TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
+_TRUST_CF_HEADER = os.getenv("TRUST_CF_CONNECTING_IP", "").strip().lower() in ("1", "true", "yes")
+
 
 def get_client_ip(request: Request) -> str:
-    cf = request.headers.get("cf-connecting-ip")
-    if cf:
-        return cf.strip()
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+    if _TRUST_CF_HEADER:
+        cf = request.headers.get("cf-connecting-ip")
+        if cf:
+            return cf.strip()
+
+    if _TRUSTED_PROXY_HOPS > 0:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            # Беремо IP, доданий найдальшим ДОВІРЕНИМ проксі (рахунок справа).
+            # Клієнт може дописати сміття зліва — воно не впливає на цю позицію.
+            if len(parts) >= _TRUSTED_PROXY_HOPS:
+                return parts[-_TRUSTED_PROXY_HOPS]
+
     return request.client.host if request.client else "unknown"
 
 

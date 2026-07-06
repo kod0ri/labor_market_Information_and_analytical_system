@@ -118,9 +118,13 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> CurrentUser:
     """
-    Залежність FastAPI: декодує токен, оновлює last_seen_at (для «онлайн»)
-    і повертає поточного користувача. Усі акаунти — адміністратори, тож
-    окремої перевірки ролі немає. Старі токени без uid доповнюються з БД.
+    Залежність FastAPI: декодує токен, звіряє, що акаунт ще існує й активний,
+    оновлює last_seen_at (для «онлайн») і повертає поточного користувача.
+    Усі акаунти — адміністратори, тож окремої перевірки ролі немає. Старі
+    токени без uid доповнюються з БД.
+
+    is_active перевіряється на КОЖНОМУ запиті: деактивація чи видалення акаунта
+    відкликає його токен одразу, а не по закінченні терміну дії.
     """
     # Локальний імпорт розриває цикл security ↔ repository.
     from src.auth.repository import UserRepository
@@ -139,6 +143,10 @@ async def get_current_user(
             if row is None or not row["is_active"]:
                 raise HTTPException(status_code=401, detail="Користувача не знайдено")
             user_id = row["id"]
-        await UserRepository.touch_last_seen(conn, int(user_id))
+            await UserRepository.touch_last_seen(conn, int(user_id))
+        else:
+            is_active = await UserRepository.touch_and_get_active(conn, int(user_id))
+            if is_active is None or not is_active:
+                raise HTTPException(status_code=401, detail="Акаунт неактивний або видалений")
 
     return CurrentUser(id=int(user_id), username=username)

@@ -63,6 +63,30 @@ class UserRepository:
         )
 
     @staticmethod
+    async def touch_and_get_active(conn: Any, user_id: int) -> bool | None:
+        """
+        За один round-trip: перевіряє існування/активність користувача і
+        throttle-оновлює last_seen_at. Повертає is_active, або None якщо
+        користувача більше немає (видалений). Використовується на кожному
+        автентифікованому запиті, щоб токен деактивованого акаунта переставав
+        працювати одразу, а не аж по закінченні терміну дії.
+        """
+        return await conn.fetchval(
+            f"""
+            UPDATE auth.users
+            SET last_seen_at = CASE
+                    WHEN last_seen_at IS NULL
+                         OR last_seen_at < now() - interval '{_TOUCH_THROTTLE_SECONDS} seconds'
+                    THEN now()
+                    ELSE last_seen_at
+                END
+            WHERE id = $1
+            RETURNING is_active
+            """,
+            user_id,
+        )
+
+    @staticmethod
     async def list_all(conn: Any) -> list[dict[str, Any]]:
         rows = await conn.fetch(
             f"""
