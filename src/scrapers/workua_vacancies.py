@@ -6,7 +6,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from src.db.database import AsyncDatabasePool
-from src.scrapers.utils import fetch_html
+from src.scrapers.utils import fetch_html, parse_card_links
 
 BASE_URL = "https://www.work.ua"
 # days=122: горизонт пошуку вакансій (~4 місяці). Достатньо для охоплення ринку без перегляду архіву.
@@ -53,26 +53,7 @@ async def process_vacancy_page(
 
 
 def _sync_parse_list_page(list_html: str) -> Dict[str, str]:
-    soup = BeautifulSoup(list_html, "lxml")
-    cards = soup.find_all("div", class_="card-hover")
-
-    page_jobs: Dict[str, str] = {}
-    if not cards:
-        return page_jobs
-
-    for card in cards:
-        link_tag = card.find("a", href=True)
-        if not link_tag:
-            continue
-
-        href = link_tag.get("href")
-        if isinstance(href, str) and href.startswith("/jobs/"):
-            parts = href.split("/")
-            if len(parts) > 2:
-                external_id = parts[2]
-                page_jobs[external_id] = f"{BASE_URL}{href}"
-
-    return page_jobs
+    return parse_card_links(list_html, "/jobs/")
 
 
 async def main() -> None:

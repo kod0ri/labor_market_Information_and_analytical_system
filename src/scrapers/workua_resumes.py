@@ -5,7 +5,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from src.db.database import AsyncDatabasePool
-from src.scrapers.utils import fetch_html
+from src.scrapers.utils import fetch_html, parse_card_links
 
 BASE_URL = "https://www.work.ua"
 SEARCH_URL = f"{BASE_URL}/resumes-it/"
@@ -19,22 +19,7 @@ def _sync_parse_resume(html: str, url: str) -> dict:
 
 
 def _sync_parse_list_page(list_html: str) -> dict[str, str]:
-    soup = BeautifulSoup(list_html, "lxml")
-    cards = soup.find_all("div", class_="card-hover")
-
-    page_resumes: dict[str, str] = {}
-    for card in cards:
-        link_tag = card.find("a", href=True)
-        if not link_tag:
-            continue
-        href = link_tag.get("href")
-        if isinstance(href, str) and href.startswith("/resumes/"):
-            parts = href.split("/")
-            if len(parts) > 2:
-                external_id = parts[2]
-                page_resumes[external_id] = f"{BASE_URL}{href}"
-
-    return page_resumes
+    return parse_card_links(list_html, "/resumes/")
 
 
 async def process_resume_page(
