@@ -15,11 +15,14 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 
+# find_many повертає (items, total): total — загальна кількість записів під
+# фільтр (COUNT(*) OVER() в тому ж запиті), або None якщо сторінка порожня
+# (page за межами даних) — тоді фасад добирає total окремим count().
 @runtime_checkable
 class IVacancyRepository(Protocol):
     async def find_many(
         self, conn: Any, filters: dict[str, Any], limit: int, offset: int
-    ) -> list[dict[str, Any]]: ...
+    ) -> tuple[list[dict[str, Any]], int | None]: ...
 
     async def count(self, conn: Any, filters: dict[str, Any]) -> int: ...
 
@@ -28,7 +31,7 @@ class IVacancyRepository(Protocol):
 class IResumeRepository(Protocol):
     async def find_many(
         self, conn: Any, filters: dict[str, Any], limit: int, offset: int
-    ) -> list[dict[str, Any]]: ...
+    ) -> tuple[list[dict[str, Any]], int | None]: ...
 
     async def count(self, conn: Any, filters: dict[str, Any]) -> int: ...
 
@@ -38,11 +41,13 @@ class VacancyRepository:
 
     async def find_many(
         self, conn: Any, filters: dict[str, Any], limit: int, offset: int
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int | None]:
         where_clauses, params = self._build_where(filters)
         where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         params.extend([limit, offset])
 
+        # COUNT(*) OVER() рахує всі групи (= distinct вакансій під фільтр) ДО
+        # LIMIT — тож total отримуємо в цьому ж запиті, без окремого count().
         sql = f"""
             SELECT
                 v.id,
@@ -58,7 +63,8 @@ class VacancyRepository:
                 COALESCE(
                     ARRAY_AGG(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL),
                     ARRAY[]::text[]
-                ) AS skills
+                ) AS skills,
+                COUNT(*) OVER() AS total_count
             FROM core.vacancies v
             LEFT JOIN dictionaries.companies c ON v.company_id = c.id
             LEFT JOIN dictionaries.locations l ON v.location_id = l.id
@@ -70,11 +76,13 @@ class VacancyRepository:
             LIMIT ${len(params) - 1} OFFSET ${len(params)}
         """
         rows = await conn.fetch(sql, *params)
-        return [
-            {**{k: v for k, v in dict(r).items() if k != "skills"},
+        total = rows[0]["total_count"] if rows else None
+        items = [
+            {**{k: v for k, v in dict(r).items() if k not in ("skills", "total_count")},
              "skills": list(r["skills"]) if r["skills"] else []}
             for r in rows
         ]
+        return items, total
 
     async def count(self, conn: Any, filters: dict[str, Any]) -> int:
         where_clauses, params = self._build_where(filters)
@@ -133,11 +141,13 @@ class ResumeRepository:
 
     async def find_many(
         self, conn: Any, filters: dict[str, Any], limit: int, offset: int
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int | None]:
         where_clauses, params = self._build_where(filters)
         where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         params.extend([limit, offset])
 
+        # COUNT(*) OVER() рахує всі групи (= distinct резюме під фільтр) ДО
+        # LIMIT — тож total отримуємо в цьому ж запиті, без окремого count().
         sql = f"""
             SELECT
                 r.id,
@@ -152,7 +162,8 @@ class ResumeRepository:
                 COALESCE(
                     ARRAY_AGG(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL),
                     ARRAY[]::text[]
-                ) AS skills
+                ) AS skills,
+                COUNT(*) OVER() AS total_count
             FROM core.resumes r
             LEFT JOIN dictionaries.locations l ON r.location_id = l.id
             LEFT JOIN core.resume_skills rs ON r.id = rs.resume_id
@@ -163,11 +174,13 @@ class ResumeRepository:
             LIMIT ${len(params) - 1} OFFSET ${len(params)}
         """
         rows = await conn.fetch(sql, *params)
-        return [
-            {**{k: v for k, v in dict(r).items() if k != "skills"},
+        total = rows[0]["total_count"] if rows else None
+        items = [
+            {**{k: v for k, v in dict(r).items() if k not in ("skills", "total_count")},
              "skills": list(r["skills"]) if r["skills"] else []}
             for r in rows
         ]
+        return items, total
 
     async def count(self, conn: Any, filters: dict[str, Any]) -> int:
         where_clauses, params = self._build_where(filters)
