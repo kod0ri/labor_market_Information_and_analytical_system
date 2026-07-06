@@ -1,23 +1,19 @@
 import os
 import json
-import re
 import asyncio
-from pydantic import ValidationError
 from dotenv import load_dotenv
 
-from src.db.database import AsyncDatabasePool
 from src.processor.schemas import ResumeSchema
 from src.processor.skill_normalizer import resolve_skill_id
-from src.processor.failure_tracker import record_failure, mark_resolved
+from src.processor.failure_tracker import mark_resolved
+from src.processor.nlp_pipeline import run_llm_record
 from src.processor.llm_cascade import (
-    complete,
     any_available,
     budget_summary,
     cascade_summary,
-    AllProvidersExhausted,
-    AllProvidersBusy,
 )
 from src.processor.llm_utils import prepare_text_for_llm, get_or_create_location, get_or_create_source
+from src.db.database import AsyncDatabasePool
 
 load_dotenv()
 
@@ -53,10 +49,6 @@ async def process_single_resume(
     staging_id = record["id"]
     source_name = record["source_name"]
 
-    if not any_available():
-        print(f"   ⏸️ [ID {staging_id}] LLM-бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
-        return False
-
     raw_text = record["raw_text"]
     raw_json = (
         record["raw_json"]
@@ -72,102 +64,51 @@ async def process_single_resume(
         {"role": "user", "content": prompt},
     ]
 
-    max_attempts = 3
-    transient_busy = False
-    for attempt in range(max_attempts):
-        try:
-            response_text, provider, model = await complete(messages)
+    async def _persist(conn, ai_data: ResumeSchema) -> str:
+        final_title = ai_data.title or base_title
 
-            match = re.search(r"\{.*\}", response_text, re.DOTALL)
-            if not match:
-                raise ValueError("LLM не повернула валідний JSON")
-
-            ai_data = ResumeSchema.model_validate_json(match.group(0))
-            final_title = ai_data.title or base_title
-
-            async with db_semaphore:
-                async with AsyncDatabasePool.get_connection() as conn:
-                    async with conn.transaction():
-                        loc_id = await get_or_create_location(
-                            conn, ai_data.location_name, ai_data.region,
-                            cache, cache_lock,
-                        )
-                        src_id = await get_or_create_source(
-                            conn, source_name, cache, cache_lock,
-                        )
-                        new_resume_id = await conn.fetchval(
-                            """
-                            INSERT INTO core.resumes
-                                (staging_id, title, location_id, source_id,
-                                 min_salary, max_salary, currency,
-                                 experience_years, english_level)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                            RETURNING id;
-                            """,
-                            staging_id, str(final_title)[:200], loc_id, src_id,
-                            ai_data.min_salary, ai_data.max_salary, ai_data.currency,
-                            ai_data.experience_years, ai_data.english_level,
-                        )
-                        for skill in ai_data.skills:
-                            skill_id = await resolve_skill_id(
-                                conn, skill.name, skill.category, cache, cache_lock,
-                            )
-                            if skill_id:
-                                await conn.execute(
-                                    "INSERT INTO core.resume_skills (resume_id, skill_id) "
-                                    "VALUES ($1, $2) ON CONFLICT DO NOTHING;",
-                                    new_resume_id, skill_id,
-                                )
-                        await conn.execute(
-                            "UPDATE staging.raw_resumes SET raw_text = NULL WHERE id = $1;",
-                            staging_id,
-                        )
-                        await mark_resolved(conn, "resume", staging_id)
-
-            print(f"   💾 Успішно [{provider}/{model}]: [ID {staging_id}] {str(final_title)[:35]}...")
-            return True
-
-        except AllProvidersExhausted:
-            print(f"   ⏸️ [ID {staging_id}] Бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
-            return False
-
-        except AllProvidersBusy as e:
-            transient_busy = True
-            print(f"   ⏳ [ID {staging_id}] Усі провайдери зайняті (спроба {attempt + 1}/{max_attempts}). Чекаємо {e.retry_after:.1f}s...")
-            await asyncio.sleep(e.retry_after)
-
-        except ValidationError as ve:
-            transient_busy = False
-            failed_fields = [str(e.get("loc", [""])[0]) for e in ve.errors()]
-            detail = f"fields={failed_fields}"
-            print(f"   ⚠️ [ID {staging_id}] Галюцинація LLM (спроба {attempt + 1}/{max_attempts}). {detail}")
-            if attempt == max_attempts - 1:
-                async with db_semaphore:
-                    async with AsyncDatabasePool.get_connection() as conn:
-                        await record_failure(conn, "resume", staging_id, "validation", detail, attempt + 1)
-            await asyncio.sleep(1)
-
-        except Exception as e:
-            print(f"   ❌ [ID {staging_id}] Помилка: {e}")
-            async with db_semaphore:
-                async with AsyncDatabasePool.get_connection() as conn:
-                    await record_failure(conn, "resume", staging_id, "unknown", str(e), attempt + 1)
-            return False
-
-    # Вичерпали спроби лише через rate-limit — НЕ фіксуємо провал,
-    # лишаємо запис у staging на наступний прогін.
-    if transient_busy:
-        print(f"   ⏸️ [ID {staging_id}] Ліміти провайдерів — відкладаємо на наступний прогін.")
-        return False
-
-    print(f"   💀 [ID {staging_id}] Вичерпано {max_attempts} спроби.")
-    async with db_semaphore:
-        async with AsyncDatabasePool.get_connection() as conn:
-            await record_failure(
-                conn, "resume", staging_id,
-                "validation", f"Exhausted {max_attempts} attempts", max_attempts,
+        loc_id = await get_or_create_location(
+            conn, ai_data.location_name, ai_data.region, cache, cache_lock,
+        )
+        src_id = await get_or_create_source(conn, source_name, cache, cache_lock)
+        new_resume_id = await conn.fetchval(
+            """
+            INSERT INTO core.resumes
+                (staging_id, title, location_id, source_id,
+                 min_salary, max_salary, currency,
+                 experience_years, english_level)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id;
+            """,
+            staging_id, str(final_title)[:200], loc_id, src_id,
+            ai_data.min_salary, ai_data.max_salary, ai_data.currency,
+            ai_data.experience_years, ai_data.english_level,
+        )
+        for skill in ai_data.skills:
+            skill_id = await resolve_skill_id(
+                conn, skill.name, skill.category, cache, cache_lock,
             )
-    return False
+            if skill_id:
+                await conn.execute(
+                    "INSERT INTO core.resume_skills (resume_id, skill_id) "
+                    "VALUES ($1, $2) ON CONFLICT DO NOTHING;",
+                    new_resume_id, skill_id,
+                )
+        await conn.execute(
+            "UPDATE staging.raw_resumes SET raw_text = NULL WHERE id = $1;",
+            staging_id,
+        )
+        await mark_resolved(conn, "resume", staging_id)
+        return str(final_title)[:35]
+
+    return await run_llm_record(
+        staging_id=staging_id,
+        record_type="resume",
+        messages=messages,
+        schema_cls=ResumeSchema,
+        db_semaphore=db_semaphore,
+        persist=_persist,
+    )
 
 
 async def run_processor() -> None:

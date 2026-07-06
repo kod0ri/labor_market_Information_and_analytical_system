@@ -8,7 +8,20 @@ _ALLOWED_TABLES: dict[str, str] = {
 }
 
 
-async def get_conversion_rates() -> dict[str, float]:
+async def get_conversion_rates() -> dict[str, float] | None:
+    """
+    Повертає множники валют → USD за курсом НБУ, або None, якщо авторитетний
+    курс USD отримати не вдалося.
+
+    Ключовий інваріант: НЕ фабрикуємо курс. Записи конвертуються лише реальним
+    курсом; результат (min/max_salary_usd_eq) стає non-NULL і БІЛЬШЕ НЕ
+    переоцінюється (partial-index виключає такі записи). Тому разовий збій НБУ з
+    захардкодженим фолбеком назавжди спотворив би зарплатну аналітику — краще
+    пропустити прогін і повторити наступного разу з реальним курсом.
+
+    Якщо USD є, а EUR немає — конвертуємо лише USD/UAH; EUR-записи лишаються на
+    наступний прогін (не вставляємо у словник, тож process_table їх пропустить).
+    """
     try:
         url = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
         async with aiohttp.ClientSession() as session:
@@ -20,20 +33,20 @@ async def get_conversion_rates() -> dict[str, float]:
         eur_rate = next((item["rate"] for item in data if item["cc"] == "EUR"), None)
 
         if not usd_rate:
-            raise ValueError("Не вдалося знайти курс USD у відповіді НБУ")
+            print("⚠️ У відповіді НБУ немає курсу USD — пропускаємо конвертацію до наступного прогону.")
+            return None
 
+        rates = {"USD": 1.0, "UAH": 1.0 / usd_rate}
         if eur_rate is not None:
             print(f"📊 Поточний курс НБУ: 1 USD = {usd_rate:.2f} UAH, 1 EUR = {eur_rate:.2f} UAH")
-            eur_multiplier = eur_rate / usd_rate
+            rates["EUR"] = eur_rate / usd_rate
         else:
-            print(f"📊 Поточний курс НБУ: 1 USD = {usd_rate:.2f} UAH, EUR — не знайдено, використовуємо резервне значення")
-            eur_multiplier = 43.0 / 40.0
-
-        return {"USD": 1.0, "UAH": 1.0 / usd_rate, "EUR": eur_multiplier}
+            print(f"📊 Поточний курс НБУ: 1 USD = {usd_rate:.2f} UAH, EUR — не знайдено; EUR-записи відкладено на наступний прогін.")
+        return rates
 
     except Exception as e:
-        print(f"⚠️ Помилка отримання курсів НБУ: {e}. Використовуємо резервні значення.")
-        return {"USD": 1.0, "UAH": 1.0 / 40.0, "EUR": 43.0 / 40.0}
+        print(f"⚠️ Помилка отримання курсів НБУ: {e}. Пропускаємо конвертацію до наступного прогону.")
+        return None
 
 
 async def process_table(conn, table_name: str, rates: dict[str, float]) -> int:
@@ -88,6 +101,10 @@ async def process_table(conn, table_name: str, rates: dict[str, float]) -> int:
 async def run_conversion() -> None:
     print("🚀 Починаємо процес нормалізації зарплат...")
     rates = await get_conversion_rates()
+
+    if not rates:
+        print("⏭️ Курс НБУ недоступний — конвертацію пропущено, записи лишаються на наступний прогін.")
+        return
 
     async with AsyncDatabasePool.get_connection() as conn:
         async with conn.transaction():

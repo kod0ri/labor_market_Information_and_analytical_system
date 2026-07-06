@@ -1,21 +1,17 @@
 import os
 import json
-import re
 import asyncio
-from pydantic import ValidationError
 from dotenv import load_dotenv
 
 from src.db.database import AsyncDatabasePool
 from src.processor.schemas import VacancySchema
 from src.processor.skill_normalizer import resolve_skill_id
-from src.processor.failure_tracker import record_failure, mark_resolved
+from src.processor.failure_tracker import mark_resolved
+from src.processor.nlp_pipeline import run_llm_record
 from src.processor.llm_cascade import (
-    complete,
     any_available,
     budget_summary,
     cascade_summary,
-    AllProvidersExhausted,
-    AllProvidersBusy,
 )
 from src.processor.llm_utils import (
     prepare_text_for_llm,
@@ -62,10 +58,6 @@ async def process_single_vacancy(
     staging_id = record["id"]
     source_name = record["source_name"]
 
-    if not any_available():
-        print(f"   ⏸️ [ID {staging_id}] LLM-бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
-        return False
-
     raw_html = record["raw_html"]
     raw_json = (
         record["raw_json"]
@@ -85,107 +77,56 @@ async def process_single_vacancy(
         {"role": "user", "content": prompt},
     ]
 
-    max_attempts = 3
-    transient_busy = False
-    for attempt in range(max_attempts):
-        try:
-            response_text, provider, model = await complete(messages)
+    async def _persist(conn, ai_data: VacancySchema) -> str:
+        final_company = ai_data.company_name or company_name
+        final_location = ai_data.location_name or location_name
 
-            match = re.search(r"\{.*\}", response_text, re.DOTALL)
-            if not match:
-                raise ValueError("LLM не повернула валідний JSON")
-
-            ai_data = VacancySchema.model_validate_json(match.group(0))
-
-            final_company = ai_data.company_name or company_name
-            final_location = ai_data.location_name or location_name
-
-            async with db_semaphore:
-                async with AsyncDatabasePool.get_connection() as conn:
-                    async with conn.transaction():
-                        comp_id = await get_or_create_company(
-                            conn, final_company, ai_data.company_industry,
-                            ai_data.website_url, cache, cache_lock,
-                        )
-                        loc_id = await get_or_create_location(
-                            conn, final_location, ai_data.region, cache, cache_lock,
-                        )
-                        src_id = await get_or_create_source(
-                            conn, source_name, cache, cache_lock,
-                        )
-                        new_vacancy_id = await conn.fetchval(
-                            """
-                            INSERT INTO core.vacancies
-                                (staging_id, title, company_id, location_id, source_id,
-                                 min_salary, max_salary, currency,
-                                 experience_years, english_level)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                            RETURNING id;
-                            """,
-                            staging_id, str(title)[:200], comp_id, loc_id, src_id,
-                            ai_data.min_salary, ai_data.max_salary, ai_data.currency,
-                            ai_data.experience_years, ai_data.english_level,
-                        )
-                        for skill in ai_data.skills:
-                            skill_id = await resolve_skill_id(
-                                conn, skill.name, skill.category, cache, cache_lock,
-                            )
-                            if skill_id:
-                                await conn.execute(
-                                    "INSERT INTO core.vacancy_skills (vacancy_id, skill_id) "
-                                    "VALUES ($1, $2) ON CONFLICT DO NOTHING;",
-                                    new_vacancy_id, skill_id,
-                                )
-                        await conn.execute(
-                            "UPDATE staging.raw_vacancies SET raw_html = NULL WHERE id = $1;",
-                            staging_id,
-                        )
-                        await mark_resolved(conn, "vacancy", staging_id)
-
-            print(f"   💾 Успішно [{provider}/{model}]: [ID {staging_id}] {str(title)[:35]}...")
-            return True
-
-        except AllProvidersExhausted:
-            print(f"   ⏸️ [ID {staging_id}] Бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
-            return False
-
-        except AllProvidersBusy as e:
-            transient_busy = True
-            print(f"   ⏳ [ID {staging_id}] Усі провайдери зайняті (спроба {attempt + 1}/{max_attempts}). Чекаємо {e.retry_after:.1f}s...")
-            await asyncio.sleep(e.retry_after)
-
-        except ValidationError as ve:
-            transient_busy = False
-            failed_fields = [str(e.get("loc", [""])[0]) for e in ve.errors()]
-            detail = f"fields={failed_fields}"
-            print(f"   ⚠️ [ID {staging_id}] Галюцинація LLM (спроба {attempt + 1}/{max_attempts}). {detail}")
-            if attempt == max_attempts - 1:
-                async with db_semaphore:
-                    async with AsyncDatabasePool.get_connection() as conn:
-                        await record_failure(conn, "vacancy", staging_id, "validation", detail, attempt + 1)
-            await asyncio.sleep(1)
-
-        except Exception as e:
-            print(f"   ❌ [ID {staging_id}] Помилка: {e}")
-            async with db_semaphore:
-                async with AsyncDatabasePool.get_connection() as conn:
-                    await record_failure(conn, "vacancy", staging_id, "unknown", str(e), attempt + 1)
-            return False
-
-    # Вичерпали спроби лише через rate-limit — НЕ фіксуємо провал,
-    # лишаємо запис у staging на наступний прогін.
-    if transient_busy:
-        print(f"   ⏸️ [ID {staging_id}] Ліміти провайдерів — відкладаємо на наступний прогін.")
-        return False
-
-    print(f"   💀 [ID {staging_id}] Вичерпано {max_attempts} спроби.")
-    async with db_semaphore:
-        async with AsyncDatabasePool.get_connection() as conn:
-            await record_failure(
-                conn, "vacancy", staging_id,
-                "validation", f"Exhausted {max_attempts} attempts", max_attempts,
+        comp_id = await get_or_create_company(
+            conn, final_company, ai_data.company_industry,
+            ai_data.website_url, cache, cache_lock,
+        )
+        loc_id = await get_or_create_location(
+            conn, final_location, ai_data.region, cache, cache_lock,
+        )
+        src_id = await get_or_create_source(conn, source_name, cache, cache_lock)
+        new_vacancy_id = await conn.fetchval(
+            """
+            INSERT INTO core.vacancies
+                (staging_id, title, company_id, location_id, source_id,
+                 min_salary, max_salary, currency,
+                 experience_years, english_level)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING id;
+            """,
+            staging_id, str(title)[:200], comp_id, loc_id, src_id,
+            ai_data.min_salary, ai_data.max_salary, ai_data.currency,
+            ai_data.experience_years, ai_data.english_level,
+        )
+        for skill in ai_data.skills:
+            skill_id = await resolve_skill_id(
+                conn, skill.name, skill.category, cache, cache_lock,
             )
-    return False
+            if skill_id:
+                await conn.execute(
+                    "INSERT INTO core.vacancy_skills (vacancy_id, skill_id) "
+                    "VALUES ($1, $2) ON CONFLICT DO NOTHING;",
+                    new_vacancy_id, skill_id,
+                )
+        await conn.execute(
+            "UPDATE staging.raw_vacancies SET raw_html = NULL WHERE id = $1;",
+            staging_id,
+        )
+        await mark_resolved(conn, "vacancy", staging_id)
+        return str(title)[:35]
+
+    return await run_llm_record(
+        staging_id=staging_id,
+        record_type="vacancy",
+        messages=messages,
+        schema_cls=VacancySchema,
+        db_semaphore=db_semaphore,
+        persist=_persist,
+    )
 
 
 async def main() -> None:

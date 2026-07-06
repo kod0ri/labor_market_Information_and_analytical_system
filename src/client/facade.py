@@ -58,8 +58,11 @@ class MarketDataFacade:
         filters = strategy.apply({})
         offset = (page - 1) * page_size
 
-        items = await self._vacancies.find_many(conn, filters, page_size, offset)
-        total = await self._vacancies.count(conn, filters)
+        items, total = await self._vacancies.find_many(conn, filters, page_size, offset)
+        # total is None лише на порожній сторінці (page за межами даних) —
+        # тоді добираємо реальну кількість окремим лічильником.
+        if total is None:
+            total = await self._vacancies.count(conn, filters)
 
         return {
             "items": items,
@@ -93,8 +96,11 @@ class MarketDataFacade:
         filters = strategy.apply({})
         offset = (page - 1) * page_size
 
-        items = await self._resumes.find_many(conn, filters, page_size, offset)
-        total = await self._resumes.count(conn, filters)
+        items, total = await self._resumes.find_many(conn, filters, page_size, offset)
+        # total is None лише на порожній сторінці (page за межами даних) —
+        # тоді добираємо реальну кількість окремим лічильником.
+        if total is None:
+            total = await self._resumes.count(conn, filters)
 
         return {
             "items": items,

@@ -89,23 +89,30 @@ async def build_snapshot(target_date: date | None = None) -> None:
             print(f"   ⚠️ Вакансій за {target_date} не знайдено. Записуємо порожній знімок.")
             await conn.execute(
                 UPSERT_SNAPSHOT_SQL,
-                target_date, "ALL_CATEGORIES", 0,
+                target_date, "ALL", 0,
                 total_resumes, None, avg_resume_salary,
             )
             print("   ✅ Порожній знімок збережено.")
             return
 
+        # Вакансії — по категоріях (search_category). Резюме у цьому пайплайні
+        # НЕ категоризуються, тож НЕ дублюємо їхні добові показники в кожен
+        # рядок-категорію (це множило б total_resumes у стільки разів, скільки
+        # категорій, при сумуванні по даті). Резюме йдуть одним рядком 'ALL'.
         upsert_data = [
             (
                 target_date,
                 row["category"],
                 row["total_vacancies"],
-                total_resumes,
+                0,
                 float(row["avg_vacancy_salary_usd"]) if row["avg_vacancy_salary_usd"] is not None else None,
-                avg_resume_salary,
+                None,
             )
             for row in vacancy_rows
         ]
+        upsert_data.append(
+            (target_date, "ALL", 0, total_resumes, None, avg_resume_salary)
+        )
 
         async with conn.transaction():
             await conn.executemany(UPSERT_SNAPSHOT_SQL, upsert_data)
