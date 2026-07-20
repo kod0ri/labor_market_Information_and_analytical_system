@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
 
+// Керування темною/світлою темою через клас `dark` на <html> (Tailwind
+// dark-mode стратегія "class") + localStorage, щоб вибір пережив перезавантаження.
+// Інлайн-скрипт у index.html застосовує тему ДО React-рендеру (уникає "спалаху"
+// неправильної теми при першому кадрі) - ця ж логіка getInitial() тут її
+// синхронізує зі станом React після гідратації.
+
 export type Theme = 'light' | 'dark'
 
 const STORAGE_KEY = '503work.theme'
@@ -8,6 +14,7 @@ function getInitial(): Theme {
   if (typeof window === 'undefined') return 'dark'
   const saved = window.localStorage.getItem(STORAGE_KEY) as Theme | null
   if (saved === 'light' || saved === 'dark') return saved
+  // Немає збереженого вибору - орієнтуємось на системну тему ОС/браузера.
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
