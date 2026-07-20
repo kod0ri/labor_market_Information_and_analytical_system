@@ -72,7 +72,11 @@ class FilterStrategyFactory:
         if min_salary_usd is not None:
             strategies.append(SalaryFilterStrategy(min_salary_usd=min_salary_usd))
         if experience_min is not None:
-            # Для резюме — мінімальний досвід (кандидат має >= N років)
+            # Той самий клас ExperienceFilterStrategy, що й для вакансій (де
+            # max_years = "не більше N років"), тут навмисно переюзаний з
+            # протилежною семантикою - repository.py трактує поле filters
+            # по-різному залежно від типу запиту (build_vacancy_query vs
+            # build_resume_query), тож сама стратегія лишається однією й тією ж.
             strategies.append(ExperienceFilterStrategy(max_years=experience_min))
         if location:
             strategies.append(LocationFilterStrategy(city=location))

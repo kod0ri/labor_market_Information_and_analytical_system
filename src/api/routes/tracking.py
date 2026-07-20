@@ -30,10 +30,10 @@ class TrackRequest(BaseModel):
     @field_validator("path")
     @classmethod
     def _clean_path(cls, v: str | None) -> str | None:
-        if not v:
+        if not v:                          # шлях не передано взагалі
             return None
         v = v.split("?")[0][:200]  # відкидаємо query, обмежуємо довжину
-        return v if v.startswith("/") else None
+        return v if v.startswith("/") else None   # приймаємо лише валідні відносні шляхи (захист від сміття)
 
 
 @router.post(

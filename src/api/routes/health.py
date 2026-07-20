@@ -1,3 +1,5 @@
+"""Liveness/readiness ендпоінт для Docker healthcheck і зовнішнього моніторингу."""
+
 import logging
 
 from fastapi import APIRouter
@@ -11,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 @router.get("/health")
 async def health_check() -> JSONResponse:
+    """Реально перевіряє з'єднання з БД (SELECT 1), а не просто "процес живий" -
+    застосунок може бути технічно запущений, але без робочої БД непридатний."""
     try:
         async with AsyncDatabasePool.get_connection() as conn:
             await conn.fetchval("SELECT 1")

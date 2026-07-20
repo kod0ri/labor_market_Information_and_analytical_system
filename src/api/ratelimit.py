@@ -37,7 +37,9 @@ _TRUST_CF_HEADER = os.getenv("TRUST_CF_CONNECTING_IP", "").strip().lower() in ("
 
 
 def get_client_ip(request: Request) -> str:
-    if _TRUST_CF_HEADER:
+    """Резолвить справжню IP-адресу клієнта з урахуванням довірених проксі
+    (див. докладний розбір загрози підробки XFF/CF-заголовків у docstring модуля)."""
+    if _TRUST_CF_HEADER:                                    # свідомо увімкнено ЛИШЕ якщо трафік реально йде через CF
         cf = request.headers.get("cf-connecting-ip")
         if cf:
             return cf.strip()
@@ -45,25 +47,34 @@ def get_client_ip(request: Request) -> str:
     if _TRUSTED_PROXY_HOPS > 0:
         xff = request.headers.get("x-forwarded-for")
         if xff:
-            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            parts = [p.strip() for p in xff.split(",") if p.strip()]   # "ip1, ip2, ip3" → ["ip1","ip2","ip3"]
             # Беремо IP, доданий найдальшим ДОВІРЕНИМ проксі (рахунок справа).
             # Клієнт може дописати сміття зліва — воно не впливає на цю позицію.
             if len(parts) >= _TRUSTED_PROXY_HOPS:
-                return parts[-_TRUSTED_PROXY_HOPS]
+                return parts[-_TRUSTED_PROXY_HOPS]    # напр. hops=2 → передостанній елемент списку
 
-    return request.client.host if request.client else "unknown"
+    return request.client.host if request.client else "unknown"   # фолбек - пряме TCP-з'єднання без проксі
 
 
 class SlidingWindowRateLimiter:
+    """Sliding-window лічильник запитів на ключ (зазвичай - IP клієнта).
+
+    Кожен ключ тримає deque монотонних часових міток своїх запитів; вікно
+    "ковзає" - застарілі мітки зліва відкидаються при кожній перевірці,
+    тому немає фіксованих "reset" моментів на кшталт fixed-window лічильника.
+    """
+
     def __init__(self, limit: int, window_seconds: float) -> None:
-        self.limit = limit
-        self.window = window_seconds
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
-        self._last_sweep = time.monotonic()
+        self.limit = limit                 # макс. дозволена кількість запитів у вікні
+        self.window = window_seconds       # довжина ковзного вікна в секундах
+        self._hits: dict[str, deque[float]] = defaultdict(deque)   # ключ (IP) → черга часових міток його запитів
+        self._last_sweep = time.monotonic()  # коли востаннє чистили застарілі ключі (для троттлінгу _sweep)
 
     def _sweep(self, now: float) -> None:
-        cutoff = now - self.window
-        stale = [k for k, dq in self._hits.items() if not dq or dq[-1] <= cutoff]
+        """Прибирає ключі, чий останній хіт уже застарів - без цього словник
+        `_hits` ріс би необмежено під потоком запитів від різних IP."""
+        cutoff = now - self.window                    # усе старіше цього моменту вважаємо неактивним
+        stale = [k for k, dq in self._hits.items() if not dq or dq[-1] <= cutoff]  # ключі без свіжих запитів
         for k in stale:
             del self._hits[k]
         self._last_sweep = now
@@ -71,18 +82,18 @@ class SlidingWindowRateLimiter:
     def check(self, key: str) -> tuple[bool, int]:
         """Повертає (дозволено, retry_after_seconds)."""
         now = time.monotonic()
-        dq = self._hits[key]
+        dq = self._hits[key]           # черга міток цього конкретного ключа (створюється автоматично, defaultdict)
         cutoff = now - self.window
-        while dq and dq[0] <= cutoff:
+        while dq and dq[0] <= cutoff:   # прибираємо із ЛІВОГО краю всі мітки, що вже випали з вікна
             dq.popleft()
 
-        if len(dq) >= self.limit:
-            retry_after = max(1, int(dq[0] + self.window - now) + 1)
+        if len(dq) >= self.limit:                                     # ліміт вичерпано в поточному вікні
+            retry_after = max(1, int(dq[0] + self.window - now) + 1)  # скільки чекати, поки НАЙСТАРІША мітка випаде з вікна
             return False, retry_after
 
-        dq.append(now)
+        dq.append(now)     # реєструємо цей запит як новий хіт
         if now - self._last_sweep > self.window or len(self._hits) > _SWEEP_KEYS_THRESHOLD:
-            self._sweep(now)
+            self._sweep(now)     # періодичне прибирання: не на кожен виклик, а раз на вікно або при рості словника
         return True, 0
 
 
@@ -92,10 +103,10 @@ def rate_limiter(limit: int, window_seconds: float = 60.0):
     Лімітер створюється один раз (на декоруванні роуту) і спільний для всіх
     запитів цього ендпоінта.
     """
-    limiter = SlidingWindowRateLimiter(limit, window_seconds)
+    limiter = SlidingWindowRateLimiter(limit, window_seconds)   # створюється РАЗ при імпорті роуту, не на кожен запит
 
     async def dependency(request: Request) -> None:
-        allowed, retry_after = limiter.check(get_client_ip(request))
+        allowed, retry_after = limiter.check(get_client_ip(request))   # IP клієнта - ключ лічильника
         if not allowed:
             raise HTTPException(
                 status_code=429,

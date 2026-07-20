@@ -27,13 +27,13 @@ class StatsService:
     """Збирає агреговану статистику по всіх таблицях системи."""
 
     async def get_system_stats(self, conn: Any) -> dict[str, Any]:
-        vacancies_total = await conn.fetchval("SELECT COUNT(*) FROM core.vacancies")
-        resumes_total = await conn.fetchval("SELECT COUNT(*) FROM core.resumes")
-        skills_count = await conn.fetchval("SELECT COUNT(*) FROM dictionaries.skills")
-        companies_count = await conn.fetchval("SELECT COUNT(*) FROM dictionaries.companies")
-        locations_count = await conn.fetchval("SELECT COUNT(*) FROM dictionaries.locations")
+        vacancies_total = await conn.fetchval("SELECT COUNT(*) FROM core.vacancies")   # усього оброблених вакансій
+        resumes_total = await conn.fetchval("SELECT COUNT(*) FROM core.resumes")       # усього оброблених резюме
+        skills_count = await conn.fetchval("SELECT COUNT(*) FROM dictionaries.skills")       # розмір довідника навичок
+        companies_count = await conn.fetchval("SELECT COUNT(*) FROM dictionaries.companies") # розмір довідника компаній
+        locations_count = await conn.fetchval("SELECT COUNT(*) FROM dictionaries.locations") # розмір довідника локацій
 
-        raw_vacancies_pending = await conn.fetchval(
+        raw_vacancies_pending = await conn.fetchval(   # ще НЕ оброблені LLM-каскадом вакансії (той самий запит, що й у nlp_vacancies.py)
             """
             SELECT COUNT(*)
             FROM staging.raw_vacancies s
@@ -41,7 +41,7 @@ class StatsService:
             WHERE s.raw_html IS NOT NULL AND s.raw_html != '' AND c.id IS NULL
             """
         )
-        raw_resumes_pending = await conn.fetchval(
+        raw_resumes_pending = await conn.fetchval(     # аналогічно для резюме
             """
             SELECT COUNT(*)
             FROM staging.raw_resumes s
@@ -91,7 +91,7 @@ class FailureService:
                 "error_detail": r["error_detail"],
                 "attempt_count": r["attempt_count"],
                 "is_resolved": r["is_resolved"],
-                "failed_at": r["failed_at"].isoformat() if r["failed_at"] else None,
+                "failed_at": r["failed_at"].isoformat() if r["failed_at"] else None,   # asyncpg datetime → ISO-рядок для JSON
             }
             for r in rows
         ]
@@ -105,6 +105,9 @@ class FailureService:
             """,
             failure_id,
         )
+        # asyncpg execute() повертає command tag рядком ("UPDATE 1"/"UPDATE 0"),
+        # не число - порівнюємо рядок напряму замість парсингу, щоб дізнатись,
+        # чи справді оновився рядок (WHERE could not match - вже вирішено чи не існує).
         return result == "UPDATE 1"
 
 
@@ -131,7 +134,7 @@ class PipelineService:
         unresolved_failures = await conn.fetchval(
             "SELECT COUNT(*) FROM staging.failed_records WHERE is_resolved = FALSE"
         )
-        failure_by_type = await conn.fetch(
+        failure_by_type = await conn.fetch(   # розбивка нерозв'язаних помилок за типом (validation/rate_limit/unknown)
             """
             SELECT error_type, COUNT(*) AS cnt
             FROM staging.failed_records
@@ -140,10 +143,10 @@ class PipelineService:
             ORDER BY cnt DESC
             """
         )
-        last_vacancy_row = await conn.fetchrow(
+        last_vacancy_row = await conn.fetchrow(    # мітка часу останньої успішно обробленої вакансії
             "SELECT created_at FROM core.vacancies ORDER BY created_at DESC LIMIT 1"
         )
-        last_resume_row = await conn.fetchrow(
+        last_resume_row = await conn.fetchrow(     # те саме для резюме
             "SELECT created_at FROM core.resumes ORDER BY created_at DESC LIMIT 1"
         )
 
@@ -185,8 +188,8 @@ class SystemService:
 
     @staticmethod
     def _disk() -> dict[str, Any]:
-        usage = shutil.disk_usage(SystemService._DISK_PATH)
-        percent = round(usage.used / usage.total * 100, 1) if usage.total else 0.0
+        usage = shutil.disk_usage(SystemService._DISK_PATH)   # namedtuple (total, used, free) у байтах
+        percent = round(usage.used / usage.total * 100, 1) if usage.total else 0.0   # захист від ділення на 0
         return {
             "path": SystemService._DISK_PATH,
             "total_bytes": usage.total,
@@ -199,13 +202,13 @@ class SystemService:
     def _memory() -> dict[str, Any] | None:
         """Память з /proc/meminfo (Linux). На інших ОС повертає None."""
         try:
-            info: dict[str, int] = {}
+            info: dict[str, int] = {}       # накопичуємо всі рядки /proc/meminfo як {ключ: байти}
             with open("/proc/meminfo", encoding="ascii") as fh:
-                for line in fh:
-                    key, _, rest = line.partition(":")
+                for line in fh:                                  # напр. "MemTotal:       16384000 kB"
+                    key, _, rest = line.partition(":")            # ("MemTotal", ":", "       16384000 kB")
                     info[key] = int(rest.strip().split()[0]) * 1024  # kB → bytes
             total = info.get("MemTotal", 0)
-            available = info.get("MemAvailable", info.get("MemFree", 0))
+            available = info.get("MemAvailable", info.get("MemFree", 0))   # MemAvailable точніший, MemFree - фолбек
             used = total - available
             percent = round(used / total * 100, 1) if total else 0.0
             return {
@@ -220,16 +223,19 @@ class SystemService:
     @staticmethod
     def _load() -> dict[str, float] | None:
         try:
+            # os.getloadavg() відсутній на Windows (AttributeError) - деплой
+            # цього проєкту завжди Linux/Docker, але метод лишається безпечним
+            # і для локальної розробки на інших ОС (просто повертає None).
             one, five, fifteen = os.getloadavg()
             return {"1m": round(one, 2), "5m": round(five, 2), "15m": round(fifteen, 2)}
         except (OSError, AttributeError):
             return None
 
     async def get_system_metrics(self, conn: Any) -> dict[str, Any]:
-        db_size_bytes = await conn.fetchval("SELECT pg_database_size(current_database())")
-        user_counts = await UserRepository.counts(conn)
-        users = await UserRepository.list_all(conn)
-        visitors = await VisitRepository.metrics(conn)
+        db_size_bytes = await conn.fetchval("SELECT pg_database_size(current_database())")   # розмір усієї БД у байтах
+        user_counts = await UserRepository.counts(conn)     # {total, active, online, new_7d}
+        users = await UserRepository.list_all(conn)         # повний список акаунтів для таблиці в адмінці
+        visitors = await VisitRepository.metrics(conn)       # анонімна статистика відвідувачів (online/24h/7d)
 
         return {
             "visitors": visitors,

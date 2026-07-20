@@ -69,6 +69,9 @@ class MarketDataFacade:
             "total": total,
             "page": page,
             "page_size": page_size,
+            # (total + page_size - 1) // page_size = округлення кількості
+            # сторінок ВГОРУ цілочисельною арифметикою (стандартний трюк ceil-div);
+            # max(1, ...) - навіть при total=0 показуємо мінімум 1 (порожню) сторінку.
             "pages": max(1, (total + page_size - 1) // page_size),
         }
 
@@ -107,6 +110,9 @@ class MarketDataFacade:
             "total": total,
             "page": page,
             "page_size": page_size,
+            # (total + page_size - 1) // page_size = округлення кількості
+            # сторінок ВГОРУ цілочисельною арифметикою (стандартний трюк ceil-div);
+            # max(1, ...) - навіть при total=0 показуємо мінімум 1 (порожню) сторінку.
             "pages": max(1, (total + page_size - 1) // page_size),
         }
 
