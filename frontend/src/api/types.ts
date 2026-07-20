@@ -1,3 +1,8 @@
+// TypeScript-дзеркало Pydantic response_model'ів бекенду (src/api/routes/
+// analytics.py, src/admin/interfaces.py тощо) - поля й типи навмисно 1:1,
+// щоб форма відповіді API була видна в самому фронтенд-коді без перемикання
+// у Swagger. Змінюєш поле в Pydantic-схемі - онови й тут вручну (без codegen).
+
 export interface Overview {
   total_vacancies: number
   total_resumes: number

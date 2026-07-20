@@ -3,6 +3,9 @@ export interface Segment<T extends string> {
   label: string
 }
 
+// Дженерик по T (union рядкових літералів на кшталт 'day'|'week'|'month') -
+// перемикач у стилі iOS/macOS для взаємовиключних режимів графіка
+// (період/бакет/метрика тощо) по всьому дашборду.
 export function SegmentedControl<T extends string>({
   value,
   onChange,

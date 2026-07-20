@@ -48,17 +48,19 @@ class TokenResponse(BaseModel):
     dependencies=[Depends(rate_limiter(_LOGIN_RATE_LIMIT, 60))],
 )
 async def login(body: LoginRequest):
+    """Перевіряє логін/пароль і видає JWT. rate_limiter на роуті обмежує
+    брутфорс по IP; фіктивний хеш нижче обмежує ще й enumeration за часом."""
     async with AsyncDatabasePool.get_connection() as conn:
-        user = await UserRepository.get_by_username(conn, body.username)
+        user = await UserRepository.get_by_username(conn, body.username)   # None, якщо такого логіна нема
 
     # Звіряємо хеш навіть за відсутності користувача — щоб час відповіді
     # не залежав від того, чи існує логін (захист від user enumeration).
     stored_hash = user["password_hash"] if user else (
-        "pbkdf2_sha256$600000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        "pbkdf2_sha256$600000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="   # фіктивний валідний за форматом хеш
     )
-    password_ok = verify_password(body.password, stored_hash)
+    password_ok = verify_password(body.password, stored_hash)   # завжди виконує повний PBKDF2-цикл, навіть для фіктивного хеша
 
-    if user is None or not user["is_active"] or not password_ok:
+    if user is None or not user["is_active"] or not password_ok:   # об'єднана перевірка - однакова помилка для всіх трьох випадків
         raise HTTPException(status_code=401, detail="Невірний логін або пароль")
 
     token = create_token(user_id=user["id"], username=user["username"])

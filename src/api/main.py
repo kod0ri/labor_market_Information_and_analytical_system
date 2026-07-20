@@ -1,3 +1,13 @@
+"""
+FastAPI-застосунок 503Work: точка збірки всіх підсистем API в один сервер.
+
+Три групи роутів змонтовані під різними префіксами: публічна аналітика
+й пошук (analytics/client) - без авторизації за задумом (дашборд відкритий),
+адмінка (admin) - за JWT, tracking/health - службові. Життєвий цикл (lifespan)
+гарантує, що пул БД, auth-схема і tracking-схема готові ДО прийому запитів,
+і коректно закриваються при зупинці процесу.
+"""
+
 import os
 from contextlib import asynccontextmanager
 
@@ -16,6 +26,12 @@ from src.tracking.bootstrap import ensure_tracking_schema
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Ініціалізація/очищення на весь час життя процесу uvicorn (ASGI lifespan).
+
+    Порядок важливий: секрет перевіряється ДО з'єднання з БД (немає сенсу
+    відкривати пул, якщо застосунок все одно впаде), а схеми auth/tracking
+    готуються ДО yield, тобто до першого прийнятого HTTP-запиту.
+    """
     # Fail fast: без валідного JWT_SECRET застосунок не повинен стартувати.
     get_secret_key()
     await AsyncDatabasePool.initialize()
@@ -29,7 +45,7 @@ app = FastAPI(
     title="Labor Market Analytics API",
     description=(
         "REST API для інформаційно-аналітичної системи ринку праці України.\n\n"
-        "Джерело даних: work.ua (вакансії та резюме IT-сектору).\n\n"
+        "Джерела даних: work.ua, robota.ua, dou.ua (вакансії та резюме).\n\n"
         "**Підсистеми:**\n"
         "- `/api/admin` — адміністративна підсистема (SOLID-принципи)\n"
         "- `/api/client` — клієнтська підсистема (GoF: Facade, Repository, Strategy, Factory)\n\n"
@@ -42,17 +58,19 @@ app = FastAPI(
 
 _cors_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:5173",
-).split(",")
+    "http://localhost:3000,http://localhost:5173",   # дефолт під локальну розробку (CRA-порт + Vite-порт)
+).split(",")   # список дозволених origin-ів; у проді задається реальним доменом фронтенду через .env
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH"],
+    allow_origins=_cors_origins,       # явний allowlist, не "*", бо allow_credentials=True
+    allow_credentials=True,            # потрібно для JWT-кукі/заголовків адмінки
+    allow_methods=["GET", "POST", "PATCH"],  # рівно ті методи, що реально використовує API
     allow_headers=["*"],
 )
 
+# Кожен роутер монтується під власним префіксом - health без /api (для
+# інфраструктурних liveness-перевірок за конвенцією), решта під /api/*.
 app.include_router(health.router, tags=["System"])
 app.include_router(tracking.router, prefix="/api", tags=["Tracking"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])

@@ -7,6 +7,7 @@ import { PageHeader } from '../components/PageHeader'
 import { SegmentedControl } from '../components/SegmentedControl'
 import { EmptyState, ErrorState, Loading } from '../components/States'
 import { formatDate, formatNumber, formatSalaryRange } from '../lib/format'
+import { useI18n } from '../lib/i18n'
 
 const PAGE_SIZE = 20
 
@@ -17,49 +18,64 @@ const ENGLISH_LEVELS = [
 
 type Mode = 'vacancies' | 'resumes'
 
+// Пошук по /api/client/{vacancies,resumes}/search. Обидва хуки (useClientVacancies/
+// useClientResumes) викликаються ЗАВЖДИ (правило хуків React забороняє умовний
+// виклик), і в обох немає `enabled`-прапорця в hooks.ts - тож НЕактивний режим
+// теж реально шле запит, лише з порожніми фільтрами {} замість справжніх
+// (зайвий, але дешевий HTTP-виклик; не оптимізовано навмисно чи випадково -
+// варто мати на увазі при профілюванні мережі).
 export default function ClientSearchPage() {
+  const { t } = useI18n()
   const [mode, setMode] = useState<Mode>('vacancies')
   const { values, setValues, debounced, reset } = useListingFilters()
   const [englishLevel, setEnglishLevel] = useState('')
   const [page, setPage] = useState(1)
   const sourcesQuery = useSources()
-  const sourceNames = sourcesQuery.data?.map((s) => s.source) ?? []
+  const sourceNames = sourcesQuery.data?.map((s) => s.source) ?? []   // список назв для select-фільтра "Джерело"
 
+  // Будь-яка зміна фільтра/режиму скидає на 1-шу сторінку - інакше можна
+  // застрягти на сторінці 5, змінити фільтр і побачити порожній результат,
+  // бо під новим фільтром сторінок може бути менше.
   useEffect(() => {
     setPage(1)
   }, [debounced.skill, debounced.location, debounced.minSalary, debounced.experience, debounced.source, englishLevel, mode])
 
-  const baseFilters: ClientSearchFilters = {
+  const baseFilters: ClientSearchFilters = {   // спільні для обох режимів фільтри (усе, крім семантики experience)
     page,
     page_size: PAGE_SIZE,
-    skill: debounced.skill.trim() || undefined,
+    skill: debounced.skill.trim() || undefined,               // порожній рядок → undefined (apiGet пропустить параметр)
     location: debounced.location.trim() || undefined,
-    min_salary_usd: debounced.minSalary ? Number(debounced.minSalary) : undefined,
+    min_salary_usd: debounced.minSalary ? Number(debounced.minSalary) : undefined,   // рядок з інпута → число
     english_level: englishLevel || undefined,
     source: debounced.source || undefined,
   }
 
   const vacancyFilters: ClientSearchFilters = {
     ...baseFilters,
+    // "досвід не більше N років" - окремий query-параметр experience_max
+    // (не плутати з experience_min у resumeFilters нижче - різні поля на
+    // рівні HTTP-запиту, хоча на бекенді обидва зрештою зводяться до одного
+    // internal-ключа "experience_max" через ExperienceFilterStrategy).
     experience_max: debounced.experience ? Number(debounced.experience) : undefined,
   }
 
   const resumeFilters: ClientSearchFilters = {
     ...baseFilters,
+    // "досвід кандидата не менше N років" - окремий параметр experience_min
     experience_min: debounced.experience ? Number(debounced.experience) : undefined,
   }
 
   const vacQuery = useClientVacancies(mode === 'vacancies' ? vacancyFilters : {})
   const resQuery = useClientResumes(mode === 'resumes' ? resumeFilters : {})
 
-  const query = mode === 'vacancies' ? vacQuery : resQuery
+  const query = mode === 'vacancies' ? vacQuery : resQuery   // активний запит для рендеру - другий просто ігнорується
   const total = query.data?.total ?? 0
-  const totalPages = query.data?.pages ?? 1
+  const totalPages = query.data?.pages ?? 1                  // з бекенду (ceil(total/page_size)) - не рахуємо самі
 
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Пошук"
+        title={t('search.title')}
         description={
           query.data
             ? `Знайдено ${formatNumber(total)} записів${query.isFetching ? ' (оновлюється…)' : ''}`
@@ -130,7 +146,11 @@ export default function ClientSearchPage() {
             </Card>
           ) : (
             <>
-              {/* мобайл: картки замість таблиці */}
+              {/* Два незалежні рендери одних і тих самих даних: картки для
+                  <md (таблиця з 7 колонками не влізла б без горизонтального
+                  скролу на телефоні) і повна таблиця для md+. Обидва
+                  завжди в DOM, Tailwind (`md:hidden`/`hidden md:block`)
+                  просто ховає непотрібний варіант через CSS. */}
               <div className="space-y-3 md:hidden">
                 {query.data.items.map((item) => (
                   <div key={item.id} className="card p-4">
@@ -140,6 +160,9 @@ export default function ClientSearchPage() {
                         {formatSalaryRange(item.min_salary_usd_eq, item.max_salary_usd_eq)}
                       </div>
                     </div>
+                    {/* item - об'єднаний тип вакансія|резюме, тож company_name є лише
+                        у вакансій; 'in'-перевірка + приведення типу, бо TS не звужує
+                        union за рантайм-полем mode самостійно */}
                     {mode === 'vacancies' && 'company_name' in item &&
                       (item as { company_name?: string | null }).company_name && (
                         <div className="muted mt-0.5 truncate text-xs">
@@ -243,16 +266,16 @@ export default function ClientSearchPage() {
                   <button
                     type="button"
                     className="btn"
-                    disabled={page <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page <= 1}                                    // на 1-й сторінці "назад" неактивна
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}       // clamp знизу - про всяк випадок, не має спрацювати при disabled
                   >
                     ← Попередня
                   </button>
                   <button
                     type="button"
                     className="btn"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}                                  // на останній сторінці "вперед" неактивна
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}     // clamp зверху - симетрично до кнопки "назад"
                   >
                     Наступна →
                   </button>

@@ -1,3 +1,13 @@
+"""
+Публічні аналітичні ендпоінти (без авторизації - дашборд відкритий за задумом).
+
+12 ендпоінтів нижче - усі "read-only" й формують саме той набір даних, що
+показує React-дашборд (Dashboard/Skills/Salary/Geography сторінки). Спільний
+патерн: словники _SOURCE_TABLE/_SKILL_JOIN/... параметризують один і той
+самий SQL під query-параметр `type=vacancy|resume`, щоб не дублювати
+однакові запити двічі - для вакансій і для резюме.
+"""
+
 from datetime import date
 from typing import Literal, Optional
 
@@ -8,6 +18,10 @@ from src.db.database import AsyncDatabasePool
 
 router = APIRouter()
 
+# Таблиця/JOIN/колонка підставляються в SQL за строковим ключем "vacancy"/
+# "resume" з query-параметра - НЕ довільний ввід користувача (Literal-тип
+# у FastAPI обмежує допустимі значення ще на рівні валідації запиту),
+# тож підстановка в f-string нижче безпечна.
 _SOURCE_TABLE: dict[str, str] = {
     "vacancy": "core.vacancies",
     "resume": "core.resumes",
@@ -185,11 +199,11 @@ async def get_top_skills(
     Топ навичок по попиту (vacancy) або пропозиції (resume).
     Використовуй для горизонтального bar chart.
     """
-    join = _SKILL_JOIN[type]
-    count_col = _SKILL_COUNT_COL[type]
+    join = _SKILL_JOIN[type]              # текст JOIN-у на vacancy_skills або resume_skills залежно від type
+    count_col = _SKILL_COUNT_COL[type]    # яку колонку рахувати COUNT() - vacancy_id чи resume_id
 
-    category_filter = "AND s.category = $2" if category else ""
-    params = [limit, category] if category else [limit]
+    category_filter = "AND s.category = $2" if category else ""   # додатковий WHERE-фрагмент, лише якщо задано category
+    params = [limit, category] if category else [limit]            # позиційні параметри мають збігатись із $1/$2 у SQL
 
     query = f"""
         SELECT s.name, s.category, COUNT({count_col}) AS count
@@ -266,6 +280,10 @@ async def get_salary_distribution(
     Використовуй для BarChart де X — діапазон, Y — кількість.
     """
     table = _SOURCE_TABLE[type]
+    # Трирівнева вкладеність: raw (беремо середину min/max ЗП кожного запису) →
+    # bucketed (мапимо середину на один із 6 фіксованих діапазонів через CASE) →
+    # зовнішній GROUP BY рахує кількість у кожному діапазоні. Фіксовані межі
+    # діапазонів (не динамічні квантилі) - для стабільної, передбачуваної осі X графіка.
     query = f"""
         SELECT
             range_label,
@@ -380,7 +398,7 @@ async def get_experience_levels(
     return [dict(r) for r in rows]
 
 
-_BUCKET_TRUNC: dict[str, str] = {
+_BUCKET_TRUNC: dict[str, str] = {   # мапить query-параметр 1:1 на аргумент SQL date_trunc()
     "day": "day",
     "week": "week",
     "month": "month",
@@ -397,7 +415,11 @@ async def get_activity(
     Повертає кількість + середню ЗП у періоді.
     Використовуй для area/line chart з перемикачем Кількість/Зарплата.
     """
-    trunc = _BUCKET_TRUNC[bucket]
+    trunc = _BUCKET_TRUNC[bucket]   # "day"/"week"/"month" - підставляється прямо в SQL нижче (не параметр $)
+    # UNION ALL об'єднує вакансії й резюме в один потік рядків із міткою kind,
+    # щоб один GROUP BY date_trunc(...) дав по періоду ОБИДВА ряди одразу
+    # (new_vacancies/new_resumes) - без цього довелося б робити два окремі
+    # запити і зводити результати в Python.
     query = f"""
         WITH all_rows AS (
             SELECT

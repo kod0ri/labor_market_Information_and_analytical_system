@@ -40,6 +40,8 @@ class AdminFacade:
         self._system: ISystemService = system or SystemService()
 
     async def get_stats(self, conn: Any) -> dict[str, Any]:
+        # Кожен метод фасаду - "тонка" делегація одному з чотирьох сервісів;
+        # роутер (router.py) знає лише про AdminFacade, не про конкретні сервіси.
         return await self._stats.get_system_stats(conn)
 
     async def get_failures(self, conn: Any, limit: int = 50) -> list[dict[str, Any]]:

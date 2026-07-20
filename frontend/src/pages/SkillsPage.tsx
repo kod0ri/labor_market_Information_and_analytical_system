@@ -8,37 +8,42 @@ import { PageHeader } from '../components/PageHeader'
 import { SegmentedControl } from '../components/SegmentedControl'
 import { ErrorState, Loading } from '../components/States'
 import { formatNumber, formatPercent } from '../lib/format'
+import { useI18n } from '../lib/i18n'
 
+// Три вкладки поверх двох різних ендпоінтів: demand/supply перемикають лише
+// `type` параметр одного useTopSkills-запиту (той самий графік, інші дані),
+// а gap - зовсім окремий useSkillGap-запит із власним графіком праворуч.
 type Tab = 'demand' | 'supply' | 'gap'
 type Cat = 'all' | SkillCategory
 
 export default function SkillsPage() {
+  const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('demand')
   const [category, setCategory] = useState<Cat>('all')
 
-  const isList = tab !== 'gap'
-  const type: DataKind = tab === 'supply' ? 'resume' : 'vacancy'
+  const isList = tab !== 'gap'                                 // demand/supply рендерять один layout, gap - інший
+  const type: DataKind = tab === 'supply' ? 'resume' : 'vacancy'  // supply-вкладка читає резюме, решта (demand) - вакансії
 
   const topQ = useTopSkills(
     type,
     20,
-    category === 'all' ? undefined : category,
+    category === 'all' ? undefined : category,   // 'all' → undefined, бекенд тоді не фільтрує за категорією
   )
-  const gapQ = useSkillGap(20)
+  const gapQ = useSkillGap(20)   // завжди виконується, навіть на demand/supply вкладках (хук не можна викликати умовно)
 
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Навички"
-        description="Попит та пропозиція по навичкам, gap-аналіз ринку"
+        title={t('skills.title')}
+        description={t('skills.desc')}
         actions={
           <SegmentedControl<Tab>
             value={tab}
             onChange={setTab}
             segments={[
-              { value: 'demand', label: 'Попит' },
-              { value: 'supply', label: 'Пропозиція' },
-              { value: 'gap', label: 'Gap-аналіз' },
+              { value: 'demand', label: t('skills.seg.demand') },
+              { value: 'supply', label: t('skills.seg.supply') },
+              { value: 'gap', label: t('skills.seg.gap') },
             ]}
           />
         }
@@ -103,9 +108,9 @@ function CategorySplit({
   if (isLoading) return <Card title="Hard vs Soft"><Loading rows={2} /></Card>
 
   const rows = data ?? []
-  const hard = rows.filter((r) => r.category === 'Hard').reduce((s, r) => s + r.count, 0)
-  const soft = rows.filter((r) => r.category === 'Soft').reduce((s, r) => s + r.count, 0)
-  const total = hard + soft
+  const hard = rows.filter((r) => r.category === 'Hard').reduce((s, r) => s + r.count, 0)   // сума згадок Hard-навичок у поточному топі
+  const soft = rows.filter((r) => r.category === 'Soft').reduce((s, r) => s + r.count, 0)   // -"- Soft
+  const total = hard + soft                                                                  // база для відсотків смужки нижче
 
   if (!total) {
     return (
@@ -115,7 +120,7 @@ function CategorySplit({
     )
   }
 
-  const hardPct = (hard / total) * 100
+  const hardPct = (hard / total) * 100   // ширина Hard-сегмента смужки у %, Soft = решта (100 - hardPct)
   return (
     <Card title="Hard vs Soft" description="Розподіл у поточному топі">
       <div className="space-y-3 text-sm">
@@ -158,9 +163,12 @@ function GapHighlights({
   if (isLoading) return <Card><Loading rows={4} /></Card>
   if (isError) return <Card><ErrorState /></Card>
 
+  // Топ-5 у КОЖНОМУ напрямку окремо (найбільший дефіцит і найбільше
+  // перенасичення), а не топ-10 за модулем - дає читачеві одразу дві чіткі
+  // категорії замість одного змішаного списку.
   const rows = data ?? []
-  const deficits = [...rows].filter((g) => g.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, 5)
-  const surplus = [...rows].filter((g) => g.gap < 0).sort((a, b) => a.gap - b.gap).slice(0, 5)
+  const deficits = [...rows].filter((g) => g.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, 5)   // gap>0: попит>пропозиція, найбільший спершу
+  const surplus = [...rows].filter((g) => g.gap < 0).sort((a, b) => a.gap - b.gap).slice(0, 5)     // gap<0: сортуємо за зростанням - найвід'ємніше (найбільший надлишок) спершу
 
   return (
     <>

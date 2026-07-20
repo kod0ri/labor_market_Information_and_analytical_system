@@ -16,6 +16,9 @@ import type { DataKind } from '../../api/types'
 import { formatNumber, formatUSD } from '../../lib/format'
 import { EmptyState, ErrorState, Loading } from '../States'
 
+// Два режими: чистий bar chart кількості (withSalary=false) або ComposedChart
+// із другою віссю Y праворуч для середньої ЗП по бакету досвіду - обидва
+// перевикористовують один запит useExperienceLevels, різниця лише в рендері.
 export function ExperienceChart({
   type = 'vacancy',
   withSalary = true,
@@ -40,8 +43,10 @@ export function ExperienceChart({
         <BarChart data={rows} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="bucket" />
-          <YAxis tickFormatter={(v) => formatNumber(v as number)} />
+          <YAxis allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
           <Tooltip formatter={(v) => [formatNumber(v as number), 'Кількість']} />
+          {/* Спадна прозорість зліва направо (junior→senior) - легкий
+              візуальний градієнт замість суцільного однакового кольору стовпців. */}
           <Bar dataKey="count" radius={[6, 6, 0, 0]} barSize={38}>
             {rows.map((_, i) => (
               <Cell
@@ -61,7 +66,7 @@ export function ExperienceChart({
       <ComposedChart data={rows} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="bucket" />
-        <YAxis yAxisId="count" tickFormatter={(v) => formatNumber(v as number)} />
+        <YAxis yAxisId="count" allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <YAxis
           yAxisId="salary"
           orientation="right"

@@ -1,3 +1,11 @@
+"""
+Оркестрація повного ETL-циклу через Prefect: збір → NLP-збагачення →
+конвертація валют → аналітичний знімок. Кожна @task обгортає вже існуючу
+main()-точку входу відповідного модуля (scrapers/sources/processor) - сама
+бізнес-логіка живе там, тут лише порядок виконання й Prefect-спостережуваність
+(PENDING/RUNNING/FAILED стан кожного кроку, автоматичні retries).
+"""
+
 import asyncio
 from prefect import flow, task, get_run_logger
 
@@ -8,6 +16,10 @@ from src.processor import nlp_vacancies, nlp_resumes, currency_converter
 from src.processor.analytics_snapshot import run_snapshot
 
 
+# retries=2 на скрапери - мережеві джерела (work.ua) час від часу тимчасово
+# недоступні; NLP/конвертація/знімок нижче retries НЕ мають - їхні власні
+# внутрішні механізми (LLM-каскад, ідемпотентний UPSERT) вже обробляють
+# часткові збої, і сліпий Prefect-retry цілого кроку лише подвоїв би роботу.
 @task(name="Scrape Vacancies", retries=2, retry_delay_seconds=10)
 async def task_scrape_vacancies():
     logger = get_run_logger()
@@ -34,7 +46,7 @@ async def task_collect_dou():
 async def task_collect_robota():
     """robota.ua GraphQL → staging (далі LLM-обробка на етапі 2)."""
     logger = get_run_logger()
-    logger.info("Збір IT-вакансій з robota.ua...")
+    logger.info("Збір вакансій з robota.ua...")
     await robota_vacancies.main()
 
 
@@ -66,13 +78,13 @@ async def task_build_snapshot():
     await run_snapshot()
 
 
-@flow(name="Labor Market ETL Pipeline", log_prints=True)
+@flow(name="Labor Market ETL Pipeline", log_prints=True)   # log_prints=True - print() у задачах теж потрапляє в Prefect-логи
 async def etl_flow():
-    logger = get_run_logger()
+    logger = get_run_logger()             # структурований логер Prefect (видно у UI/логах flow-запуску)
     logger.info("🚀 Старт ETL пайплайну!")
 
     try:
-        await AsyncDatabasePool.initialize()
+        await AsyncDatabasePool.initialize()   # єдиний пул на весь flow - усі задачі нижче користуються ним
 
         # asyncio.gather() запускає async-задачі конкурентно в ОДНОМУ event loop.
         # Попередній паттерн .submit() + asyncio.to_thread(future.result) породжував
@@ -85,7 +97,7 @@ async def etl_flow():
         # work.ua (вакансії+резюме) + DOU + robota.ua → staging; LLM-обробка на етапі 2.
         # Лишаємо лише джерела з повними полями (ЗП/досвід/англ./гео/навички);
         # структуровані job-борди без цих полів прибрано — вони псували статистику.
-        await asyncio.gather(
+        await asyncio.gather(          # усі 4 джерела одночасно - незалежні одне від одного, різні сайти
             task_scrape_vacancies(),
             task_scrape_resumes(),
             task_collect_dou(),
@@ -93,7 +105,7 @@ async def etl_flow():
         )
 
         logger.info("--- Етап 2: NLP обробка (паралельно) ---")
-        await asyncio.gather(
+        await asyncio.gather(           # вакансії й резюме одночасно - обидва тягнуть з ТОГО Ж LLM-каскаду (спільний бюджет)
             task_nlp_vacancies(),
             task_nlp_resumes(),
         )
@@ -115,4 +127,9 @@ async def etl_flow():
 
 
 if __name__ == "__main__":
-    asyncio.run(etl_flow())
+    try:
+        asyncio.run(etl_flow())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # etl_flow()'s finally: уже закрив пул з'єднань до цього моменту -
+        # тут лише глушимо шумний traceback Prefect/asyncio від Ctrl+C.
+        print("\n⏹️ Пайплайн перервано користувачем (Ctrl+C). З'єднання з БД закрито коректно.")

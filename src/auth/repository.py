@@ -20,6 +20,9 @@ _TOUCH_THROTTLE_SECONDS = 60
 class UserRepository:
     @staticmethod
     async def get_by_username(conn: Any, username: str) -> Any | None:
+        """lower(username) - логін нечутливий до регістру при пошуку, хоча
+        зберігається у введеному вигляді (унікальність теж по lower(), див.
+        idx_users_username_lower у bootstrap.py)."""
         return await conn.fetchrow(
             """
             SELECT id, username, password_hash, is_active, created_at, last_seen_at
@@ -58,7 +61,7 @@ class UserRepository:
             WHERE id = $1
               AND (last_seen_at IS NULL
                    OR last_seen_at < now() - interval '{_TOUCH_THROTTLE_SECONDS} seconds')
-            """,
+            """,   # WHERE-умова throttle: якщо оновлювали менше хвилини тому - UPDATE нічого не змінить (0 рядків)
             user_id,
         )
 
@@ -102,8 +105,8 @@ class UserRepository:
                 "id": r["id"],
                 "username": r["username"],
                 "is_active": r["is_active"],
-                "is_online": r["is_online"],
-                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "is_online": r["is_online"],       # обчислено просто у SQL (BETWEEN/AND-вираз вище), не в Python
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,     # datetime → ISO-рядок для JSON
                 "last_seen_at": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
             }
             for r in rows

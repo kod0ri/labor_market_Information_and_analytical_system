@@ -12,7 +12,7 @@ from src.db.database import AsyncDatabasePool
 from src.admin.facade import get_admin_facade
 
 # Усі акаунти — адміністратори; достатньо бути автентифікованим.
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_user)])   # застосовується до КОЖНОГО роуту цього router-а одразу
 
 
 @router.get("/stats", summary="Загальна статистика системи")

@@ -34,11 +34,11 @@ class VisitRepository:
     @staticmethod
     async def metrics(conn: Any) -> dict[str, Any]:
         # Прибираємо застарілі записи (lazy-cleanup на читанні метрик адміном).
-        await conn.execute(
+        await conn.execute(   # видаляється лише при запиті метрик адміном - немає окремого cron/задачі для цього
             f"DELETE FROM analytics.visits WHERE seen_at < now() - interval '{RETENTION_DAYS} days'"
         )
 
-        online = await conn.fetchval(
+        online = await conn.fetchval(   # унікальних visitor_id за останні ONLINE_WINDOW_MINUTES хвилин
             f"""
             SELECT COUNT(DISTINCT visitor_id) FROM analytics.visits
             WHERE seen_at > now() - interval '{ONLINE_WINDOW_MINUTES} minutes'
@@ -55,14 +55,14 @@ class VisitRepository:
         agg = await conn.fetchrow(
             f"""
             WITH buckets AS (
-                SELECT floor(extract(epoch FROM seen_at) / {_BUCKET_SECONDS}) AS bucket,
-                       COUNT(DISTINCT visitor_id) AS online
+                SELECT floor(extract(epoch FROM seen_at) / {_BUCKET_SECONDS}) AS bucket,   -- номер 5-хв інтервалу
+                       COUNT(DISTINCT visitor_id) AS online                                  -- унікальних у цьому інтервалі
                 FROM analytics.visits
                 WHERE seen_at > now() - interval '24 hours'
                 GROUP BY bucket
             )
-            SELECT COALESCE(ROUND(AVG(online), 1), 0) AS avg_online,
-                   COALESCE(MAX(online), 0)           AS peak_online
+            SELECT COALESCE(ROUND(AVG(online), 1), 0) AS avg_online,   -- середнє по всіх 5-хв інтервалах доби
+                   COALESCE(MAX(online), 0)           AS peak_online   -- максимальний інтервал (пікове навантаження)
             FROM buckets
             """
         )

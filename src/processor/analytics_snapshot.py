@@ -69,21 +69,27 @@ UPSERT_SNAPSHOT_SQL = """
 
 
 async def build_snapshot(target_date: date | None = None) -> None:
+    """Рахує й UPSERT-ить один добовий знімок ринку (по категоріях + 'ALL' для резюме).
+
+    Ідемпотентно: повторний виклик з тим самим target_date просто перераховує
+    й перезаписує ті самі рядки (ON CONFLICT DO UPDATE), тож функцію безпечно
+    викликати як щоденний cron-крок, так і вручну для перерахунку/backfill.
+    """
     if target_date is None:
         target_date = date.today()
 
     print(f"📸 Побудова аналітичного знімку за {target_date}...")
 
     async with AsyncDatabasePool.get_connection() as conn:
-        resume_row = await conn.fetchrow(RESUMES_AGGREGATION_SQL, target_date)
-        total_resumes = resume_row["total_resumes"] if resume_row else 0
+        resume_row = await conn.fetchrow(RESUMES_AGGREGATION_SQL, target_date)  # один рядок: усі резюме за добу
+        total_resumes = resume_row["total_resumes"] if resume_row else 0       # 0, якщо запит не повернув рядка
         avg_resume_salary = (
-            float(resume_row["avg_resume_salary_usd"])
+            float(resume_row["avg_resume_salary_usd"])       # SQL AVG() повертає Decimal - приводимо до float
             if resume_row and resume_row["avg_resume_salary_usd"] is not None
             else None
         )
 
-        vacancy_rows = await conn.fetch(VACANCIES_AGGREGATION_SQL, target_date)
+        vacancy_rows = await conn.fetch(VACANCIES_AGGREGATION_SQL, target_date)  # по РЯДКУ на кожну категорію ринку
 
         if not vacancy_rows:
             print(f"   ⚠️ Вакансій за {target_date} не знайдено. Записуємо порожній знімок.")
@@ -99,18 +105,18 @@ async def build_snapshot(target_date: date | None = None) -> None:
         # НЕ категоризуються, тож НЕ дублюємо їхні добові показники в кожен
         # рядок-категорію (це множило б total_resumes у стільки разів, скільки
         # категорій, при сумуванні по даті). Резюме йдуть одним рядком 'ALL'.
-        upsert_data = [
+        upsert_data = [    # один tuple-рядок на UPSERT для кожної категорії вакансій
             (
-                target_date,
-                row["category"],
-                row["total_vacancies"],
-                0,
+                target_date,                              # snapshot_date
+                row["category"],                           # категорія ринку ("IT", "Продажі", ...)
+                row["total_vacancies"],                     # кількість вакансій цієї категорії за добу
+                0,                                          # total_resumes=0 - резюме тут не рахуються (див. коментар вище)
                 float(row["avg_vacancy_salary_usd"]) if row["avg_vacancy_salary_usd"] is not None else None,
-                None,
+                None,                                        # avg_resume_salary_usd=None з тієї ж причини
             )
             for row in vacancy_rows
         ]
-        upsert_data.append(
+        upsert_data.append(   # окремий підсумковий рядок 'ALL' - лише для резюме (вони некатегоризовані)
             (target_date, "ALL", 0, total_resumes, None, avg_resume_salary)
         )
 
@@ -129,6 +135,9 @@ async def build_snapshot(target_date: date | None = None) -> None:
 
 
 async def backfill_history(days_back: int = 30) -> None:
+    """Перебудовує знімки за останні `days_back` днів по черзі (найстаріший
+    спочатку) - для ручного відновлення історії після зміни логіки агрегації
+    чи втрати даних analytics.daily_market_snapshots."""
     today = date.today()
     dates = [today - timedelta(days=i) for i in range(days_back)]
     print(f"🔄 Backfill: перераховуємо {days_back} днів ({dates[-1]} → {dates[0]})...")
@@ -138,6 +147,8 @@ async def backfill_history(days_back: int = 30) -> None:
 
 
 async def run_snapshot() -> None:
+    """Точка входу для щоденного кроку пайплайна (run_pipeline.py) - лише
+    сьогоднішній знімок, без backfill."""
     await build_snapshot()
 
 

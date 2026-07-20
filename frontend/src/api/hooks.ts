@@ -1,3 +1,8 @@
+// React Query хуки - по одному на кожен REST-ендпоінт бекенду (src/api/routes/
+// analytics.py, src/admin/router.py, src/client/router.py). Компоненти сторінок
+// (pages/*.tsx) імпортують готовий хук замість власного fetch+useEffect -
+// кешування, дедуплікація запитів і повторні спроби йдуть "з коробки" react-query.
+
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPatch } from './client'
 import type {
@@ -153,8 +158,8 @@ export function useSystemMetrics(enabled = true) {
   return useQuery({
     queryKey: ['admin-system'],
     queryFn: () => apiGet<SystemMetrics>('/api/admin/system'),
-    enabled,
-    staleTime: 15 * 1000,
+    enabled,                     // дозволяє вимкнути запит (напр. поки адмін-панель не в фокусі)
+    staleTime: 15 * 1000,        // дані вважаються свіжими 15с - коротко, бо це "живі" метрики сервера
     refetchInterval: 30 * 1000, // тримаємо «онлайн» актуальним
   })
 }
@@ -168,11 +173,13 @@ export function useFailures(limit = 50) {
 }
 
 export function useResolveFailure() {
-  const qc = useQueryClient()
+  const qc = useQueryClient()             // доступ до кешу react-query для ручної інвалідації нижче
   return useMutation({
-    mutationFn: (id: number) =>
+    mutationFn: (id: number) =>            // приймає failure_id, повертає {success: bool}
       apiPatch<{ success: boolean }>(`/api/admin/failures/${id}/resolve`),
     onSuccess: () => {
+      // після успішного resolve обидва списки застаріли - форсуємо їх перезапит,
+      // щоб UI одразу показав оновлений список і статистику, без ручного refresh.
       void qc.invalidateQueries({ queryKey: ['admin-failures'] })
       void qc.invalidateQueries({ queryKey: ['admin-pipeline'] })
     },
@@ -186,6 +193,9 @@ export function useClientVacancies(filters: ClientSearchFilters = {}) {
     queryKey: ['client-vacancies', filters],
     queryFn: () =>
       apiGet<ClientPaginatedVacancies>('/api/client/vacancies/search', { ...filters }),
+    // placeholderData зберігає ПОПЕРЕДНІ результати видимими під час завантаження
+    // нової сторінки/фільтра - таблиця пошуку не блимає порожнім станом при
+    // кожній зміні сторінки пагінації.
     placeholderData: (prev) => prev,
   })
 }

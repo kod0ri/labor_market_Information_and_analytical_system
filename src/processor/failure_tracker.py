@@ -51,10 +51,10 @@ async def record_failure(
     """
     await conn.execute(
         UPSERT_FAILED_SQL,
-        record_type,
-        staging_id,
-        attempt_count,
-        error_type,
+        record_type,     # 'vacancy' чи 'resume' - частина складеного ключа ON CONFLICT
+        staging_id,       # id вихідного запису в staging.* - інша частина ключа
+        attempt_count,    # номер спроби, на якій стався цей провал
+        error_type,       # 'validation' | 'rate_limit' | 'unknown'
         error_detail[:2000],  # обрізаємо щоб не перевищити розумний розмір
     )
 

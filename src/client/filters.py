@@ -113,10 +113,10 @@ class CompositeFilterStrategy:
     """
 
     def __init__(self, strategies: list[IFilterStrategy]) -> None:
-        self._strategies = strategies
+        self._strategies = strategies   # лише активні стратегії - factory.py додає сюди тільки задані фільтри
 
     def apply(self, params: dict[str, Any]) -> dict[str, Any]:
-        result = dict(params)
-        for strategy in self._strategies:
-            result = strategy.apply(result)
-        return result
+        result = dict(params)                    # копія - не мутуємо вхідний словник викликача
+        for strategy in self._strategies:         # кожна стратегія додає СВІЙ ключ у словник фільтрів
+            result = strategy.apply(result)        # результат однієї стратегії - вхід для наступної
+        return result                              # фінальний dict іде прямо в repository._build_where як filters

@@ -17,6 +17,9 @@ const EMPTY: ListingFilterValues = {
   source: '',
 }
 
+// Затримує поширення значення на `delay` мс від ОСТАННЬОЇ зміни - кожен новий
+// value скидає попередній таймер (cleanup у useEffect), тож користувач може
+// друкувати вільно, і запит на бекенд летить лише після паузи в наборі тексту.
 function useDebounced<T>(value: T, delay = 400): T {
   const [v, setV] = useState(value)
   useEffect(() => {
@@ -26,6 +29,9 @@ function useDebounced<T>(value: T, delay = 400): T {
   return v
 }
 
+// values - те, що показує форма (оновлюється миттєво, інпут не гальмує);
+// debounced - те, що йде у фільтри API-запиту (з паузою) - розділення
+// запобігає новому HTTP-запиту на КОЖНЕ натискання клавіші в полі пошуку.
 export function useListingFilters() {
   const [values, setValues] = useState<ListingFilterValues>(EMPTY)
   const debounced = {

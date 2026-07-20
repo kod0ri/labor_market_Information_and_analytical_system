@@ -26,6 +26,9 @@ export function SkillGapChart({ limit = 15, height = 460 }: Props) {
   if (isError) return <ErrorState />
   if (!data || data.length === 0) return <EmptyState description="Замало даних для gap-аналізу" />
 
+  // Сортуємо за модулем розриву (не за самим gap) - найбільший дефіцит
+  // (gap>>0) і найбільше перенасичення (gap<<0) однаково цікаві на графіку,
+  // а сортування лише за gap сховало б перенасичені навички в самий низ.
   const rows = [...data].sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap))
 
   return (
@@ -36,7 +39,7 @@ export function SkillGapChart({ limit = 15, height = 460 }: Props) {
         margin={{ top: 5, right: 24, left: 8, bottom: 5 }}
       >
         <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-        <XAxis type="number" tickFormatter={(v) => formatNumber(v as number)} />
+        <XAxis type="number" allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <YAxis
           type="category"
           dataKey="name"

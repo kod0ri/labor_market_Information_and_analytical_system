@@ -7,24 +7,29 @@ import { PageHeader } from '../components/PageHeader'
 import { SegmentedControl } from '../components/SegmentedControl'
 import { EmptyState, ErrorState, Loading } from '../components/States'
 import { formatNumber, formatPercent } from '../lib/format'
+import { useI18n } from '../lib/i18n'
 
 export default function GeographyPage() {
+  const { t } = useI18n()
   const [type, setType] = useState<DataKind>('vacancy')
   const { data, isLoading, isError } = useLocations(type, 20)
+  // total рахується на клієнті з тих самих 20 рядків, що й у графіку/списку -
+  // це сума ТОП-20, а не загальна кількість по всьому ринку (менші міста
+  // за межею топу не входять у знаменник відсотків нижче).
   const total = (data ?? []).reduce((s, l) => s + l.count, 0)
 
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Географія"
-        description="Розподіл вакансій та резюме по містах України"
+        title={t('geo.title')}
+        description={t('geo.desc')}
         actions={
           <SegmentedControl<DataKind>
             value={type}
             onChange={setType}
             segments={[
-              { value: 'vacancy', label: 'Вакансії' },
-              { value: 'resume', label: 'Резюме' },
+              { value: 'vacancy', label: t('geo.seg.vacancies') },
+              { value: 'resume', label: t('geo.seg.resumes') },
             ]}
           />
         }
@@ -49,7 +54,7 @@ export default function GeographyPage() {
             <ol className="space-y-2 text-sm">
               {data.map((l, i) => (
                 <li
-                  key={`${l.city_name}-${i}`}
+                  key={`${l.city_name}-${i}`}   // індекс у ключі про всяк випадок - назви міст теоретично можуть повторюватись у різних регіонах
                   className="flex items-center justify-between gap-3 border-b border-[var(--card-border)]/60 pb-2 last:border-0"
                 >
                   <div className="flex min-w-0 items-center gap-2">

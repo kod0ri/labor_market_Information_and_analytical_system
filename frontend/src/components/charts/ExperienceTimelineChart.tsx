@@ -13,6 +13,10 @@ import type { BucketSize, DataKind } from '../../api/types'
 import { formatNumber, formatPercent } from '../../lib/format'
 import { EmptyState, ErrorState, Loading } from '../States'
 
+// Стековий area-графік junior/middle/senior/unknown у часі. mode='share'
+// перераховує абсолютні числа на % від суми бакету НА КЛІЄНТІ (бекенд віддає
+// лише сирі count'и) - так одна відповідь API обслуговує і "кількість",
+// і "частка" без додаткового запиту.
 interface Props {
   type?: DataKind
   bucket?: BucketSize
@@ -51,6 +55,8 @@ export function ExperienceTimelineChart({
 
   const fmt = (s: string) => tickFmt(s, bucket)
 
+  // _total зберігається в кожному рядку (навіть у 'count' режимі), щоб
+  // Tooltip нижче міг показати відсоток від бакету незалежно від поточного режиму.
   const rows = data.map((d) => {
     const total = d.junior + d.middle + d.senior + d.unknown
     if (mode === 'share' && total > 0) {
@@ -72,6 +78,7 @@ export function ExperienceTimelineChart({
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="bucket_start" tickFormatter={fmt} minTickGap={24} />
         <YAxis
+          allowDecimals={mode === 'share'}
           tickFormatter={(v) =>
             mode === 'share' ? `${Math.round(v as number)}%` : formatNumber(v as number)
           }

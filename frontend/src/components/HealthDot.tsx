@@ -1,5 +1,7 @@
 import { useHealth } from '../api/hooks'
 
+// Індикатор у топбарі, що показує живий статус бекенду (GET /health) -
+// пульсуюча крапка кольором сигналізує стан без потреби відкривати консоль.
 export function HealthDot() {
   const { data, isError, isLoading } = useHealth()
   const ok = !isError && data?.status === 'ok'

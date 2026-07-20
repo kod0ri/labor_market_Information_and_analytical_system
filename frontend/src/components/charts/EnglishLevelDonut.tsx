@@ -26,6 +26,9 @@ const COLORS = [
   'var(--chart-8)',
 ]
 
+// Сортує сегменти донату за СЕМАНТИЧНИМ порядком рівня (Beginner→Fluent),
+// а не за розміром чи алфавітом - невідомі значення (998) йдуть перед
+// відсутніми (999), але після усіх впізнаних рівнів.
 function rank(level: string | null): number {
   if (!level) return 999
   const i = ORDER.indexOf(level)
@@ -44,15 +47,17 @@ export function EnglishLevelDonut({
   if (isError) return <ErrorState />
   if (!data || data.length === 0) return <EmptyState description="Немає даних про англійську" />
 
+  // Записи з level=null (LLM не знайшла згадки англійської в тексті) не мають
+  // сенсу в донаті "розподіл рівнів" - прибираємо їх, а не показуємо як "N/A"-сегмент.
   const named = data.filter((r) => r.level)
   if (named.length === 0)
     return <EmptyState description="Рівень англійської не заповнений" />
 
-  const rows = [...named]
-    .map((r) => ({ name: r.level ?? '—', value: r.count }))
-    .sort((a, b) => rank(a.name) - rank(b.name))
+  const rows = [...named]                                      // копія масиву - .sort() мутує на місці
+    .map((r) => ({ name: r.level ?? '—', value: r.count }))     // перейменовуємо поля під те, що очікує recharts Pie
+    .sort((a, b) => rank(a.name) - rank(b.name))                  // сортуємо за рівнем (Beginner→Fluent), не за розміром
 
-  const total = rows.reduce((s, r) => s + r.value, 0)
+  const total = rows.reduce((s, r) => s + r.value, 0)   // сума всіх сегментів - для відсотків у Tooltip нижче
 
   return (
     <ResponsiveContainer width="100%" height={height}>

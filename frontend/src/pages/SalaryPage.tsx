@@ -8,44 +8,47 @@ import { KpiCard } from '../components/KpiCard'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorState, Loading } from '../components/States'
 import { formatNumber, formatPercent, formatUSD } from '../lib/format'
+import { useI18n } from '../lib/i18n'
 
+// Зарплатна аналітика: KPI зверху (з /api/analytics/overview), гістограма
+// розподілу і деталізовані таблиці знизу (по /api/analytics/salary-distribution,
+// окремо для вакансій і резюме - DetailTable перевикористовується для обох).
 export default function SalaryPage() {
+  const { t } = useI18n()
   const overview = useOverview()
 
   return (
     <div className="mx-auto max-w-7xl">
-      <PageHeader
-        title="Зарплати"
-        description="Розподіл зарплат у вакансіях та резюме, конвертовано в USD за курсом НБУ"
-      />
+      <PageHeader title={t('salary.title')} description={t('salary.desc')} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Сер. ЗП вакансій"
+          label={t('kpi.avgVacSalary')}
           value={overview.isLoading ? '…' : formatUSD(overview.data?.avg_vacancy_salary_usd)}
           icon={<IconCoins size={18} />}
           accent
         />
         <KpiCard
-          label="Сер. ЗП резюме"
+          label={t('kpi.avgResSalary')}
           value={overview.isLoading ? '…' : formatUSD(overview.data?.avg_resume_salary_usd)}
           icon={<IconCoins size={18} />}
         />
         <KpiCard
-          label="Вакансій з ЗП"
+          label={t('salary.kpi.vacWith')}
           value={overview.isLoading ? '…' : formatNumber(overview.data?.vacancies_with_salary)}
           hint={
             overview.data
-              ? `${formatPercent(overview.data.vacancies_with_salary, overview.data.total_vacancies)} від усіх`
+              // частка вакансій, де ЗП вдалось розпарсити/сконвертувати - решта не вказала зарплату взагалі
+              ? `${formatPercent(overview.data.vacancies_with_salary, overview.data.total_vacancies)} ${t('salary.ofAll')}`
               : undefined
           }
         />
         <KpiCard
-          label="Резюме з ЗП"
+          label={t('salary.kpi.resWith')}
           value={overview.isLoading ? '…' : formatNumber(overview.data?.resumes_with_salary)}
           hint={
             overview.data
-              ? `${formatPercent(overview.data.resumes_with_salary, overview.data.total_resumes)} від усіх`
+              ? `${formatPercent(overview.data.resumes_with_salary, overview.data.total_resumes)} ${t('salary.ofAll')}`
               : undefined
           }
         />
@@ -85,7 +88,7 @@ export default function SalaryPage() {
 
 function DetailTable({ type }: { type: DataKind }) {
   const { data, isLoading, isError } = useSalaryDistribution(type)
-  const total = (data ?? []).reduce((s, b) => s + b.count, 0)
+  const total = (data ?? []).reduce((s, b) => s + b.count, 0)   // сума по всіх бакетах - база для колонки "Частка"
 
   return (
     <Card

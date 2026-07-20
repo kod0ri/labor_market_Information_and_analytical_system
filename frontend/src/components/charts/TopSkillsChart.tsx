@@ -26,6 +26,9 @@ function truncate(s: string): string {
   return s.length > MAX_LABEL_CHARS ? s.slice(0, MAX_LABEL_CHARS - 1) + '…' : s
 }
 
+// Локальна копія того самого рішення, що й components/charts/YAxisTick.tsx
+// (YAxisTruncatedTick) - тут не перевикористана з тим модулем, хоча логіка
+// ідентична; історично написана незалежно, коли додавали цей графік.
 interface TickProps {
   x?: number
   y?: number
@@ -76,7 +79,7 @@ export function TopSkillsChart({
         margin={{ top: 5, right: 24, left: 8, bottom: 5 }}
       >
         <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-        <XAxis type="number" tickFormatter={(v) => formatNumber(v as number)} />
+        <XAxis type="number" allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <YAxis
           type="category"
           dataKey="name"
@@ -90,6 +93,9 @@ export function TopSkillsChart({
             type === 'vacancy' ? 'Вакансій' : 'Резюме',
           ]}
         />
+        {/* Колір за категорією навички (Hard/Soft), не за рангом - на
+            відміну від інших горизонтальних bar chart'ів тут прозорість
+            лише вторинна ознака рангу поверх основного розрізнення кольором. */}
         <Bar dataKey="count" radius={[0, 6, 6, 0]} barSize={16}>
           {data.map((d, i) => (
             <Cell

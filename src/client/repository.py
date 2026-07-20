@@ -42,9 +42,9 @@ class VacancyRepository:
     async def find_many(
         self, conn: Any, filters: dict[str, Any], limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int | None]:
-        where_clauses, params = self._build_where(filters)
-        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
-        params.extend([limit, offset])
+        where_clauses, params = self._build_where(filters)   # список SQL-умов + позиційні параметри під них
+        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""   # порожньо, якщо фільтрів нема
+        params.extend([limit, offset])   # LIMIT/OFFSET йдуть ОСТАННІМИ параметрами - їх номери залежать від кількості фільтрів
 
         # COUNT(*) OVER() рахує всі групи (= distinct вакансій під фільтр) ДО
         # LIMIT — тож total отримуємо в цьому ж запиті, без окремого count().
@@ -76,10 +76,10 @@ class VacancyRepository:
             LIMIT ${len(params) - 1} OFFSET ${len(params)}
         """
         rows = await conn.fetch(sql, *params)
-        total = rows[0]["total_count"] if rows else None
+        total = rows[0]["total_count"] if rows else None    # total_count однаковий у КОЖНОМУ рядку (віконна функція)
         items = [
-            {**{k: v for k, v in dict(r).items() if k not in ("skills", "total_count")},
-             "skills": list(r["skills"]) if r["skills"] else []}
+            {**{k: v for k, v in dict(r).items() if k not in ("skills", "total_count")},   # всі поля, крім службових
+             "skills": list(r["skills"]) if r["skills"] else []}    # asyncpg Array → звичайний Python list для JSON
             for r in rows
         ]
         return items, total
@@ -98,11 +98,11 @@ class VacancyRepository:
     def _build_where(
         self, filters: dict[str, Any]
     ) -> tuple[list[str], list[Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
+        clauses: list[str] = []    # SQL-умови, об'єднаються через AND у where_sql
+        params: list[Any] = []      # позиційні значення - індекс ${len(params)} завжди вказує на щойно доданий елемент
 
-        if filters.get("skill"):
-            params.append(filters["skill"].lower())
+        if filters.get("skill"):                     # фільтр застосовується, лише якщо навичку справді задано
+            params.append(filters["skill"].lower())   # порівняння регістронезалежне (LOWER з обох боків)
             clauses.append(
                 f"""EXISTS (
                     SELECT 1 FROM core.vacancy_skills vs2
@@ -111,14 +111,18 @@ class VacancyRepository:
                 )"""
             )
         if filters.get("location"):
-            params.append(f"%{filters['location']}%")
+            params.append(f"%{filters['location']}%")   # обгортаємо в % для часткового збігу (LIKE)
             clauses.append(f"LOWER(l.city_name) LIKE LOWER(${len(params)})")
-        if filters.get("min_salary_usd") is not None:
+        if filters.get("min_salary_usd") is not None:   # явна перевірка is not None - 0 теж валідне значення фільтра
             params.append(filters["min_salary_usd"])
             clauses.append(
-                f"COALESCE(v.min_salary_usd_eq, v.max_salary_usd_eq) >= ${len(params)}"
+                f"COALESCE(v.min_salary_usd_eq, v.max_salary_usd_eq) >= ${len(params)}"   # беремо будь-яку з двох меж, що є
             )
         if filters.get("experience_max") is not None:
+            # Вакансія: "досвід НЕ БІЛЬШЕ N років" (роботодавець не хоче
+            # переросту) - <=. Той самий ключ filters["experience_max"] у
+            # ResumeRepository нижче означає протилежне (>=) - див. коментар
+            # у factory.py create_resume_filters.
             params.append(filters["experience_max"])
             clauses.append(f"v.experience_years <= ${len(params)}")
         if filters.get("english_level"):
@@ -174,10 +178,10 @@ class ResumeRepository:
             LIMIT ${len(params) - 1} OFFSET ${len(params)}
         """
         rows = await conn.fetch(sql, *params)
-        total = rows[0]["total_count"] if rows else None
+        total = rows[0]["total_count"] if rows else None    # total_count однаковий у КОЖНОМУ рядку (віконна функція)
         items = [
-            {**{k: v for k, v in dict(r).items() if k not in ("skills", "total_count")},
-             "skills": list(r["skills"]) if r["skills"] else []}
+            {**{k: v for k, v in dict(r).items() if k not in ("skills", "total_count")},   # всі поля, крім службових
+             "skills": list(r["skills"]) if r["skills"] else []}    # asyncpg Array → звичайний Python list для JSON
             for r in rows
         ]
         return items, total
@@ -217,6 +221,8 @@ class ResumeRepository:
                 f"COALESCE(r.min_salary_usd_eq, r.max_salary_usd_eq) >= ${len(params)}"
             )
         if filters.get("experience_max") is not None:
+            # Резюме: "досвід кандидата НЕ МЕНШЕ N років" (мінімальна вимога
+            # роботодавця до кандидата) - >=, на відміну від VacancyRepository вище.
             params.append(filters["experience_max"])
             clauses.append(f"r.experience_years >= ${len(params)}")
         if filters.get("english_level"):
