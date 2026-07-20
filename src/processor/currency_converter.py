@@ -29,17 +29,17 @@ async def get_conversion_rates() -> dict[str, float] | None:
                 response.raise_for_status()
                 data = await response.json()
 
-        usd_rate = next((item["rate"] for item in data if item["cc"] == "USD"), None)
-        eur_rate = next((item["rate"] for item in data if item["cc"] == "EUR"), None)
+        usd_rate = next((item["rate"] for item in data if item["cc"] == "USD"), None)   # грн за 1 USD, або None
+        eur_rate = next((item["rate"] for item in data if item["cc"] == "EUR"), None)   # грн за 1 EUR, або None
 
-        if not usd_rate:
+        if not usd_rate:                     # без USD рахувати нема від чого - весь прогін безглуздий
             print("⚠️ У відповіді НБУ немає курсу USD — пропускаємо конвертацію до наступного прогону.")
             return None
 
-        rates = {"USD": 1.0, "UAH": 1.0 / usd_rate}
+        rates = {"USD": 1.0, "UAH": 1.0 / usd_rate}   # множники ДО USD: USD*1=USD; UAH*(1/курс)=USD
         if eur_rate is not None:
             print(f"📊 Поточний курс НБУ: 1 USD = {usd_rate:.2f} UAH, 1 EUR = {eur_rate:.2f} UAH")
-            rates["EUR"] = eur_rate / usd_rate
+            rates["EUR"] = eur_rate / usd_rate     # крос-курс EUR→USD через проміжний UAH
         else:
             print(f"📊 Поточний курс НБУ: 1 USD = {usd_rate:.2f} UAH, EUR — не знайдено; EUR-записи відкладено на наступний прогін.")
         return rates
@@ -50,10 +50,20 @@ async def get_conversion_rates() -> dict[str, float] | None:
 
 
 async def process_table(conn, table_name: str, rates: dict[str, float]) -> int:
+    """Конвертує min/max_salary → *_usd_eq для однієї таблиці (vacancies/resumes).
+
+    `table_name` іде у SQL через f-string (asyncpg не параметризує ідентифікатори
+    таблиць) - _ALLOWED_TABLES тут не про SQL-injection від користувача (виклик
+    завжди з двома жорстко заданими іменами з run_conversion нижче), а страховка
+    від помилки виклику з довільним рядком.
+    """
     safe_table = _ALLOWED_TABLES.get(table_name)
     if safe_table is None:
         raise ValueError(f"Невідома таблиця: {table_name!r}. Дозволені: {list(_ALLOWED_TABLES)}")
 
+    # WHERE ...usd_eq IS NULL - обробляємо лише те, що ще не конвертовано;
+    # уже сконвертований запис більше НІКОЛИ не потрапить сюди повторно
+    # (курс "заморожується" на момент першої конвертації, див. docstring вище).
     records = await conn.fetch(f"""
         SELECT id, min_salary, max_salary, currency
         FROM {safe_table}
@@ -66,22 +76,22 @@ async def process_table(conn, table_name: str, rates: dict[str, float]) -> int:
         print(f"✨ Немає нових записів для конвертації у таблиці {table_name}.")
         return 0
 
-    updates: list[tuple] = []
+    updates: list[tuple] = []       # накопичуємо (min_usd, max_usd, id) для пакетного UPDATE нижче
     for record in records:
-        raw_currency = record["currency"]
+        raw_currency = record["currency"]     # валюта як записав LLM (уже нормалізована схемою VacancySchema)
 
-        if not raw_currency or not raw_currency.strip():
+        if not raw_currency or not raw_currency.strip():   # порожня валюта - нема що конвертувати
             continue
 
-        currency = raw_currency.upper().strip()
-        multiplier = rates.get(currency)
+        currency = raw_currency.upper().strip()   # захист про всяк випадок, навіть якщо схема вже нормалізувала
+        multiplier = rates.get(currency)          # множник ДО USD для цієї валюти
 
-        if multiplier is None:
+        if multiplier is None:      # валюта не UAH/USD/EUR (rates не містить ключа) - пропускаємо запис
             continue
 
-        min_sal = record["min_salary"]
-        max_sal = record["max_salary"]
-        min_usd = int(float(min_sal) * multiplier) if min_sal is not None else None
+        min_sal = record["min_salary"]     # сира мінімальна ЗП у вихідній валюті (може бути None)
+        max_sal = record["max_salary"]     # сира максимальна ЗП у вихідній валюті (може бути None)
+        min_usd = int(float(min_sal) * multiplier) if min_sal is not None else None   # конвертуємо, обрізаючи до цілого
         max_usd = int(float(max_sal) * multiplier) if max_sal is not None else None
         updates.append((min_usd, max_usd, record["id"]))
 

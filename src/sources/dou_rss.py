@@ -31,49 +31,55 @@ _ID_RE = re.compile(r"/vacancies/(\d+)/")
 
 def _parse_title(title: str) -> tuple[str, str | None, str | None]:
     """'Posada в Company, location' → (title, company, location). Best-effort."""
-    if " в " not in title:
+    if " в " not in title:                     # заголовок не в очікуваному форматі - повертаємо як є
         return title.strip(), None, None
-    position, _, rest = title.rpartition(" в ")
+    position, _, rest = title.rpartition(" в ")   # ділимо по ОСТАННЬОМУ " в " (посада може містити прийменник)
     company, location = rest, None
-    if "," in rest:
+    if "," in rest:                                 # "Компанія, Місто" - розділяємо ще й локацію
         company, location = (p.strip() for p in rest.split(",", 1))
     return position.strip() or title.strip(), (company or None), (location or None)
 
 
-def _parse_feed(xml_text: str) -> list[dict]:
+def _parse_feed(xml_text: str, feed_category: str) -> list[dict]:
+    """Розбирає один RSS-фід (одна технологічна категорія DOU) у список
+    записів, готових під INSERT у staging.raw_vacancies."""
     items: list[dict] = []
-    root = ET.fromstring(xml_text)
-    for item in root.iter("item"):
-        link = (item.findtext("link") or "").strip()
-        description = item.findtext("description") or ""
-        if not link or not description:
+    root = ET.fromstring(xml_text)      # парсимо RSS 2.0 XML у дерево елементів
+    for item in root.iter("item"):      # кожен <item> - одна вакансія у фіді
+        link = (item.findtext("link") or "").strip()             # URL сторінки вакансії на DOU
+        description = item.findtext("description") or ""          # HTML-опис - те, що піде на LLM-обробку
+        if not link or not description:      # без посилання чи опису запис марний - пропускаємо
             continue
-        m = _ID_RE.search(link)
-        external_id = m.group(1) if m else link
-        raw_title = (item.findtext("title") or "").strip()
-        title, company, location = _parse_title(raw_title)
+        m = _ID_RE.search(link)                          # намагаємось витягти числовий id з /vacancies/<id>/
+        external_id = m.group(1) if m else link           # фолбек - увесь link, якщо формат не збігся
+        raw_title = (item.findtext("title") or "").strip()   # "Посада в Компанія, Місто"
+        title, company, location = _parse_title(raw_title)    # розбираємо заголовок на 3 частини (best-effort)
         items.append({
             "external_id": str(external_id)[:100],
             "raw_html": description,
-            "raw_json": {"title": title, "company": company or "", "location": location or "", "url": link},
+            "raw_json": {"title": title, "company": company or "", "location": location or "", "url": link,
+                         "dou_feed": feed_category},
         })
     return items
 
 
 async def main() -> None:
+    """Проходить усі 15 технологічних фідів DOU.ua послідовно - фіди дрібні
+    (десятки записів кожен), тож паралелізація тут не потрібна на відміну
+    від work.ua/robota.ua з їхньою багатосторінковою пагінацією."""
     await AsyncDatabasePool.initialize()
     print(f"📰 Збір вакансій з DOU.ua RSS ({len(_CATEGORIES)} категорій)...")
     inserted = 0
 
     async with aiohttp.ClientSession() as session:
-        for category in _CATEGORIES:
-            url = f"{_BASE}?category={category}"
-            xml_text = await fetch_html(session, url)
+        for category in _CATEGORIES:                     # послідовно, один запит на технологічну категорію
+            url = f"{_BASE}?category={category}"           # напр. .../feeds/?category=Python
+            xml_text = await fetch_html(session, url)       # той самий fetch_html, що й у work.ua-скраперах
             if not xml_text:
                 continue
             try:
-                items = await asyncio.to_thread(_parse_feed, xml_text)
-            except ET.ParseError as exc:
+                items = await asyncio.to_thread(_parse_feed, xml_text, category)   # парсинг XML - у окремому потоці
+            except ET.ParseError as exc:            # фід прийшов пошкодженим/не-XML
                 print(f"   ⚠️ {category}: не вдалось розпарсити RSS ({exc})")
                 continue
 
@@ -87,7 +93,9 @@ async def main() -> None:
                         ON CONFLICT (source_name, external_id) DO NOTHING
                         RETURNING id;
                         """,
-                        "dou.ua", it["external_id"], category,
+                        # search_category = канонічна мітка ринку (DOU — суто IT-борд);
+                        # конкретний технологічний фід лежить у raw_json.dou_feed.
+                        "dou.ua", it["external_id"], "IT",
                         it["raw_html"], json.dumps(it["raw_json"], ensure_ascii=False),
                     )
                     if new_id:

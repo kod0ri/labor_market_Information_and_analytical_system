@@ -52,17 +52,25 @@ async def run_llm_record(
         print(f"   ⏸️ [ID {staging_id}] LLM-бюджет усіх провайдерів вичерпано ({budget_summary()}), пропускаємо.")
         return False
 
-    transient_busy = False
-    for attempt in range(max_attempts):
+    transient_busy = False       # True, поки причина невдачі - зайнятість провайдерів, не якість LLM
+    for attempt in range(max_attempts):    # до 3 спроб на один запис (max_attempts за замовчуванням)
         try:
-            response_text, provider, model = await complete(messages)
+            response_text, provider, model = await complete(messages)  # текст відповіді + хто саме відповів
 
+            # LLM іноді огортає JSON у markdown-огорожі (```json ... ```) чи додає
+            # пояснювальний текст перед/після, попри інструкцію "лише JSON" -
+            # витягуємо перший фігурний блок замість повного json.loads(response_text).
             match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if not match:
                 raise ValueError("LLM не повернула валідний JSON")
 
+            # Pydantic-валідація: некоректні типи/відсутні поля/галюцинації
+            # структури впадуть у ValidationError нижче й підуть на retry.
             ai_data = schema_cls.model_validate_json(match.group(0))
 
+            # db_semaphore обмежує паралельні З'ЄДНАННЯ з БД (тут - запис),
+            # окремо від LLM_CONCURRENCY, що обмежує паралельні LLM-виклики -
+            # ці два ресурси мають різні природні стелі й не повинні ділити один ліміт.
             async with db_semaphore:
                 async with AsyncDatabasePool.get_connection() as conn:
                     async with conn.transaction():
@@ -76,14 +84,17 @@ async def run_llm_record(
             return False
 
         except AllProvidersBusy as e:
-            transient_busy = True
+            transient_busy = True    # позначаємо: причина - зовнішня зайнятість, не помилка даних
             print(f"   ⏳ [ID {staging_id}] Усі провайдери зайняті (спроба {attempt + 1}/{max_attempts}). Чекаємо {e.retry_after:.1f}s...")
-            await asyncio.sleep(e.retry_after)
+            await asyncio.sleep(e.retry_after)   # чекаємо стільки, скільки підказав каскад, і йдемо на новий attempt
 
         except ValidationError as ve:
+            # Схемна помилка - не тимчасова зайнятість провайдера, тож скидаємо
+            # transient_busy: якщо це остання спроба, запис піде у failed_records,
+            # а не мовчки залишиться "на потім" як при rate-limit.
             transient_busy = False
-            failed_fields = [str(err.get("loc", [""])[0]) for err in ve.errors()]
-            detail = f"fields={failed_fields}"
+            failed_fields = [str(err.get("loc", [""])[0]) for err in ve.errors()]  # які саме поля не пройшли валідацію
+            detail = f"fields={failed_fields}"    # короткий рядок-діагноз для failed_records.error_detail
             print(f"   ⚠️ [ID {staging_id}] Галюцинація LLM (спроба {attempt + 1}/{max_attempts}). {detail}")
             if attempt == max_attempts - 1:
                 async with db_semaphore:
@@ -98,6 +109,9 @@ async def run_llm_record(
                     await record_failure(conn, record_type, staging_id, "unknown", str(e), attempt + 1)
             return False
 
+    # transient_busy лишається True тільки якщо ВСІ max_attempts спроб впали саме
+    # через AllProvidersBusy (кожна ValidationError/Exception одразу скидає його
+    # в False) - тобто причина повністю зовнішня (ліміти), не якість LLM-виводу.
     # Вичерпали спроби лише через rate-limit — НЕ фіксуємо провал,
     # лишаємо запис у staging на наступний прогін.
     if transient_busy:
