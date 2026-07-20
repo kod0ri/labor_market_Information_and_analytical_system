@@ -14,6 +14,9 @@ CREATE TABLE core.vacancies (
     experience_years INTEGER,
     english_level VARCHAR(50),
     is_active BOOLEAN DEFAULT TRUE,
+    -- Рубрики «IT» агрегаторів містять і суміжні посади (SMM, продажі тощо);
+    -- LLM класифікує релевантність, публічна аналітика фільтрує по цьому полю.
+    it_related BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -32,6 +35,7 @@ CREATE TABLE core.resumes (
     max_salary_usd_eq NUMERIC,
     experience_years INTEGER,
     english_level VARCHAR(50),
+    it_related BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
