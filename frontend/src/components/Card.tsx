@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
 
+// Базовий контейнер картки-панелі, яким побудовано майже весь дашборд -
+// заголовок+опис зліва, довільні дії (SegmentedControl тощо) справа,
+// довільний вміст (графік/таблиця) нижче.
 export function Card({
   title,
   description,
@@ -21,7 +24,9 @@ export function Card({
             {title && <h2 className="t-label">{title}</h2>}
             {description && <p className="muted mt-1 text-xs">{description}</p>}
           </div>
-          {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+          {/* min-w-0 (не shrink-0) - дозволяє рядку дій перенестись на кілька
+              рядків на вузьких екранах замість вилізти за межі картки. */}
+          {actions && <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>}
         </header>
       )}
       {children}

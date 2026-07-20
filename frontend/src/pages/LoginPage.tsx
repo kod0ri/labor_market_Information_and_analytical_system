@@ -9,23 +9,29 @@ interface LoginResponse {
   username: string
 }
 
+// Єдина форма входу в застосунку - немає публічної реєстрації (акаунти
+// заводить адмін через CLI, src/auth/router.py), тож ця сторінка веде
+// лише до /admin, більше нікуди захищеного немає.
 export default function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')       // текст помилки під формою - порожній рядок означає "нема помилки"
+  const [loading, setLoading] = useState(false)  // блокує кнопку й показує "Вхід…" на час запиту
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
+    e.preventDefault()          // без цього браузер сам перезавантажив би сторінку (стандартна поведінка <form>)
     setLoading(true)
-    setError('')
+    setError('')                // скидаємо попередню помилку перед новою спробою
     try {
       const data = await apiPost<LoginResponse>('/api/auth/login', { username, password })
-      login(data.access_token)
-      navigate('/admin', { replace: true })
+      login(data.access_token)                    // кладе токен у контекст авторизації (і localStorage - див. AuthContext.tsx)
+      navigate('/admin', { replace: true })         // replace - щоб "назад" не повертало на /login з уже валідним токеном
     } catch (err) {
+      // 401 від бекенду навмисно НЕ розрізняє "нема такого логіна" від
+      // "невірний пароль" (user enumeration захист, src/auth/router.py) -
+      // фронтенд так само показує один спільний текст для обох випадків.
       if (err instanceof ApiError) {
         setError(err.status === 401 ? 'Невірний логін або пароль' : err.message)
       } else {

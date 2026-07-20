@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { useI18n } from '../lib/i18n'
+import type { Lang } from '../lib/i18n'
 import { HealthDot } from './HealthDot'
 import { IconClose, IconMenu } from './Icon'
 import { Logo } from './Logo'
 import { NAV_ITEMS } from './nav'
+import { SegmentedControl } from './SegmentedControl'
 import { ThemeToggle } from './ThemeToggle'
 
+// Верхня панель: адаптивна навігація (мобільна шухляда <lg, статичний Sidebar
+// >=lg), перемикачі мови/теми, health-індикатор і, якщо залогинений, вихід.
 export function Topbar() {
   const { token, user, logout } = useAuth()
+  const { lang, setLang, t } = useI18n()
   const navigate = useNavigate()
   const location = useLocation()
   const [open, setOpen] = useState(false)
@@ -46,7 +52,7 @@ export function Topbar() {
           <button
             type="button"
             className="btn h-10 w-10 p-0"
-            aria-label={open ? 'Закрити меню' : 'Відкрити меню'}
+            aria-label={open ? t('topbar.closeMenu') : t('topbar.openMenu')}
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
           >
@@ -56,31 +62,41 @@ export function Topbar() {
         </div>
 
         <div className="hidden font-mono text-[11px] uppercase tracking-[0.18em] muted lg:block">
-          ринок праці IT · Україна
+          {t('topbar.tagline')}
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
           <HealthDot />
+          <SegmentedControl<Lang>
+            value={lang}
+            onChange={setLang}
+            segments={[
+              { value: 'uk', label: 'UA' },
+              { value: 'en', label: 'EN' },
+            ]}
+          />
           <ThemeToggle />
           {token && user && (
             <>
               <span
                 className="hidden items-center gap-1.5 font-mono text-[11px] uppercase
                            tracking-[0.16em] muted sm:flex"
-                title="Адміністратор"
+                title={t('topbar.admin')}
               >
                 <span style={{ color: 'var(--brand)' }}>◆</span>
                 {user.username}
               </span>
               <button type="button" className="btn" onClick={handleLogout}>
-                Вийти
+                {t('topbar.logout')}
               </button>
             </>
           )}
         </div>
       </header>
 
-      {/* мобільний drawer */}
+      {/* мобільний drawer - завжди в DOM (для transition при відкритті/закритті),
+          pointer-events-none у закритому стані, щоб невидимий шар не
+          перехоплював кліки по контенту під ним. */}
       <div
         className={`fixed inset-0 z-30 lg:hidden ${open ? '' : 'pointer-events-none'}`}
         aria-hidden={!open}
@@ -102,7 +118,7 @@ export function Topbar() {
             <Logo />
           </div>
           <div className="flex-1 space-y-px overflow-y-auto py-3">
-            {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+            {NAV_ITEMS.map(({ to, labelKey, icon: Icon, end }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -112,12 +128,12 @@ export function Topbar() {
                 }
               >
                 <Icon size={16} />
-                <span>{label}</span>
+                <span>{t(labelKey)}</span>
               </NavLink>
             ))}
           </div>
           <div className="border-t border-[var(--card-border)] p-4 font-mono text-[11px] muted">
-            src: work.ua · etl → llm → sql
+            work.ua · robota.ua · dou.ua
           </div>
         </nav>
       </div>

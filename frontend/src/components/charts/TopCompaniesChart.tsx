@@ -33,7 +33,7 @@ export function TopCompaniesChart({
         margin={{ top: 5, right: 24, left: 8, bottom: 5 }}
       >
         <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-        <XAxis type="number" tickFormatter={(v) => formatNumber(v as number)} />
+        <XAxis type="number" allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <YAxis
           type="category"
           dataKey="name"
@@ -42,6 +42,8 @@ export function TopCompaniesChart({
           tick={<YAxisTruncatedTick maxChars={22} />}
         />
         <Tooltip formatter={(v) => [formatNumber(v as number), 'Вакансій']} />
+        {/* Дані вже відсортовані бекендом (ORDER BY count DESC) - опадна
+            прозорість зверху вниз лише підсилює вже наявний порядок за рангом. */}
         <Bar dataKey="count" radius={[0, 6, 6, 0]} barSize={16}>
           {data.map((d, i) => (
             <Cell key={d.name} fill="var(--chart-1)" opacity={1 - i * 0.05} />

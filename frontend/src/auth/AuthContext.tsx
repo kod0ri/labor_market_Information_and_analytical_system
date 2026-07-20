@@ -11,6 +11,10 @@ interface AuthContextValue {
   logout: () => void
 }
 
+// Клієнтський auth-стан довіряє exp з JWT-payload лише для UI (показати/
+// приховати кнопки) - РЕАЛЬНА перевірка токена (підпис, is_active) щоразу
+// відбувається на бекенді (get_current_user, src/auth/security.py); токен
+// з протермінованим exp тут просто трактується як "не залогинений".
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 /** Читає payload JWT без перевірки підпису — лише для відображення в UI. */

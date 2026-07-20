@@ -20,6 +20,8 @@ export function SourcesBreakdown({ height = 320 }: { height?: number }) {
   if (!data || data.length === 0) return <EmptyState description="Немає даних по джерелах" />
 
   return (
+    // висота росте з кількістю джерел (34px на рядок + 56px запас під заголовки осей),
+    // а не фіксована - на випадок, якщо список джерел колись стане довшим за 3
     <ResponsiveContainer width="100%" height={Math.max(height, data.length * 34 + 56)}>
       <BarChart
         data={data}
@@ -27,7 +29,7 @@ export function SourcesBreakdown({ height = 320 }: { height?: number }) {
         margin={{ top: 5, right: 24, left: 8, bottom: 5 }}
       >
         <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-        <XAxis type="number" tickFormatter={(v) => formatNumber(v as number)} />
+        <XAxis type="number" allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <YAxis
           type="category"
           dataKey="source"
@@ -44,6 +46,8 @@ export function SourcesBreakdown({ height = 320 }: { height?: number }) {
         <Legend
           formatter={(value) => (value === 'vacancies' ? 'Вакансії' : 'Резюме')}
         />
+        {/* stackId="a" на обох Bar - вакансії й резюме одного джерела в ОДНОМУ
+            стовпці (не поряд), закруглення лише на зовнішньому (правому) краю. */}
         <Bar dataKey="vacancies" stackId="a" fill="var(--chart-1)" radius={[0, 0, 0, 0]} barSize={16} />
         <Bar dataKey="resumes" stackId="a" fill="var(--chart-2)" radius={[0, 6, 6, 0]} barSize={16} />
       </BarChart>

@@ -17,9 +17,14 @@ interface Props {
   height?: number
 }
 
+// Той самий порядок бакетів, що будує бекенд (analytics.py get_salary_distribution) -
+// підтримується вручну тут, бо API повертає лише бакети З ДАНИМИ (може
+// бракувати проміжного діапазону), а графіку потрібні всі 6 колонок завжди на своєму місці.
 const ORDER = ['<$500', '$500–1k', '$1k–2k', '$2k–3k', '$3k–5k', '>$5k']
 
 export function SalaryHistogram({ showResumes = true, height = 320 }: Props) {
+  // Два незалежні запити (вакансії й резюме) замість одного - бекенд віддає
+  // розподіл окремо на type=vacancy/resume; об'єднуємо результати нижче в один графік.
   const vacQ = useSalaryDistribution('vacancy')
   const resQ = useSalaryDistribution('resume')
 
@@ -30,6 +35,8 @@ export function SalaryHistogram({ showResumes = true, height = 320 }: Props) {
   const vacMap = new Map((vacQ.data ?? []).map((b) => [b.range_label, b.count]))
   const resMap = new Map((resQ.data ?? []).map((b) => [b.range_label, b.count]))
 
+  // ORDER.map (не vacMap.entries()) - гарантує стабільний порядок і присутність
+  // усіх 6 бакетів навіть якщо якийсь із них відсутній у відповіді API (0 замість пропуску).
   const rows = ORDER.map((label) => ({
     label,
     vacancies: vacMap.get(label) ?? 0,
@@ -43,7 +50,7 @@ export function SalaryHistogram({ showResumes = true, height = 320 }: Props) {
       <BarChart data={rows} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="label" />
-        <YAxis tickFormatter={(v) => formatNumber(v as number)} />
+        <YAxis allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <Tooltip formatter={(v) => formatNumber(v as number)} />
         <Legend
           wrapperStyle={{ fontSize: 12 }}

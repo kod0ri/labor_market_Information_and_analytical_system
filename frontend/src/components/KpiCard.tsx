@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 
+// Компактна картка-показник (велике число + підпис + опційна іконка/підказка) -
+// 4 такі картки формують верхній ряд KPI на DashboardPage.
 export function KpiCard({
   label,
   value,

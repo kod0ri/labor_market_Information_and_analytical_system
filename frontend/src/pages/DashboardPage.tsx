@@ -17,7 +17,12 @@ import { PageHeader } from '../components/PageHeader'
 import { SegmentedControl } from '../components/SegmentedControl'
 import { ErrorState, Loading } from '../components/States'
 import { formatNumber, formatUSD } from '../lib/format'
+import { useI18n } from '../lib/i18n'
 
+// Головна сторінка дашборду - огляд усього ринку в одному скролі: 4 KPI
+// зверху, потім ряди карток із графіками. `range`/`bucket` - спільний стан
+// для ActivityChart і ExperienceTimelineChart (обидва графіки часового ряду
+// синхронно реагують на один і той самий перемикач періоду в шапці "Активність ринку").
 type Range = '30' | '90' | '180'
 type ActivityMetric = 'count' | 'salary'
 type ExpMode = 'count' | 'share'
@@ -25,20 +30,19 @@ type ExpMode = 'count' | 'share'
 const RANGE_DAYS: Record<Range, number> = { '30': 30, '90': 90, '180': 180 }
 
 export default function DashboardPage() {
-  const overview = useOverview()
-  const [range, setRange] = useState<Range>('90')
-  const [bucket, setBucket] = useState<BucketSize>('week')
-  const [metric, setMetric] = useState<ActivityMetric>('count')
-  const [expMode, setExpMode] = useState<ExpMode>('share')
+  const { t } = useI18n()
+  const overview = useOverview()                              // окремий запит для 4 верхніх KPI-карток
+  const [range, setRange] = useState<Range>('90')              // 30/90/180 днів - спільний для activity+timeline
+  const [bucket, setBucket] = useState<BucketSize>('week')     // день/тиждень/місяць - теж спільний
+  const [metric, setMetric] = useState<ActivityMetric>('count')  // "Нові"/"ЗП" - перемикач в картці Активність ринку
+  const [expMode, setExpMode] = useState<ExpMode>('share')     // "частка"/"кількість" - перемикач лише в картці таймлайну досвіду
 
   return (
     <div className="mx-auto max-w-7xl">
-      <PageHeader
-        title="Дашборд"
-        description="Зведена статистика ринку IT-вакансій та резюме в Україні"
-      />
+      <PageHeader title={t('dash.title')} description={t('dash.desc')} />
 
       {overview.isLoading ? (
+        // 4 skeleton-картки замість реальних KPI, поки /overview ще вантажиться
         <div className="reveal reveal-1 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="card card-pad">
@@ -47,70 +51,70 @@ export default function DashboardPage() {
           ))}
         </div>
       ) : overview.isError ? (
-        <ErrorState message="Перевірте чи запущений API на localhost:8000" />
+        <ErrorState message={t('dash.err.api')} />
       ) : (
         <div className="reveal reveal-1 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
-            label="Вакансії"
+            label={t('kpi.vacancies')}
             value={formatNumber(overview.data?.total_vacancies)}
             icon={<IconBriefcase size={18} />}
             accent
           />
           <KpiCard
-            label="Резюме"
+            label={t('kpi.resumes')}
             value={formatNumber(overview.data?.total_resumes)}
             icon={<IconSparkles size={18} />}
           />
           <KpiCard
-            label="Сер. ЗП вакансій"
+            label={t('kpi.avgVacSalary')}
             value={formatUSD(overview.data?.avg_vacancy_salary_usd)}
-            hint="USD / місяць"
+            hint={t('kpi.usdMonth')}
             icon={<IconCoins size={18} />}
           />
           <KpiCard
-            label="Сер. ЗП резюме"
+            label={t('kpi.avgResSalary')}
             value={formatUSD(overview.data?.avg_resume_salary_usd)}
-            hint="USD / місяць"
+            hint={t('kpi.usdMonth')}
             icon={<IconActivity size={18} />}
           />
         </div>
       )}
 
       <div className="reveal reveal-2 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+        {/* 2/3 ширини на xl+ - головна картка ряду, гістограма ЗП поруч займає лишню 1/3 */}
         <Card
           className="xl:col-span-2"
-          title="Активність ринку"
+          title={t('card.activity.title')}
           description={
-            metric === 'count'
-              ? 'Кількість нових вакансій та резюме у кожному періоді'
-              : 'Середня зарплата вакансій та резюме у кожному періоді'
+            metric === 'count' ? t('card.activity.descCount') : t('card.activity.descSalary')
           }
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {/* три незалежні перемикачі в одному ряду: метрика графіка, розмір бакета, діапазон днів */}
               <SegmentedControl<ActivityMetric>
                 value={metric}
                 onChange={setMetric}
                 segments={[
-                  { value: 'count', label: 'Нові' },
-                  { value: 'salary', label: 'ЗП' },
+                  { value: 'count', label: t('seg.new') },
+                  { value: 'salary', label: t('seg.salary') },
                 ]}
               />
               <SegmentedControl<BucketSize>
                 value={bucket}
                 onChange={setBucket}
                 segments={[
-                  { value: 'day', label: 'Д' },
-                  { value: 'week', label: 'Т' },
-                  { value: 'month', label: 'М' },
+                  { value: 'day', label: t('seg.day') },
+                  { value: 'week', label: t('seg.week') },
+                  { value: 'month', label: t('seg.month') },
                 ]}
               />
               <SegmentedControl<Range>
                 value={range}
                 onChange={setRange}
                 segments={[
-                  { value: '30', label: '30д' },
-                  { value: '90', label: '90д' },
-                  { value: '180', label: '180д' },
+                  { value: '30', label: t('seg.30d') },
+                  { value: '90', label: t('seg.90d') },
+                  { value: '180', label: t('seg.180d') },
                 ]}
               />
             </div>
@@ -119,28 +123,30 @@ export default function DashboardPage() {
           <ActivityChart bucket={bucket} days={RANGE_DAYS[range]} metric={metric} height={320} />
         </Card>
 
-        <Card title="Розподіл зарплат" description="Вакансії vs резюме у діапазонах USD">
+        <Card title={t('card.salaryDist.title')} description={t('card.salaryDist.desc')}>
           <SalaryHistogram height={300} />
         </Card>
       </div>
 
       <div className="reveal reveal-3 mt-6 grid grid-cols-1 gap-6">
         <Card
-          title="Структура досвіду в часі"
-          description="Як розподіляється попит на junior/middle/senior за період"
+          title={t('card.expTime.title')}
+          description={t('card.expTime.desc')}
           actions={
             <div className="flex items-center gap-2">
               <SegmentedControl<ExpMode>
                 value={expMode}
                 onChange={setExpMode}
                 segments={[
-                  { value: 'share', label: 'Частка %' },
-                  { value: 'count', label: 'Кількість' },
+                  { value: 'share', label: t('seg.share') },
+                  { value: 'count', label: t('seg.count') },
                 ]}
               />
             </div>
           }
         >
+          {/* bucket/range тут ті самі, що й у картці "Активність ринку" вище -
+              один спільний стан керує обома графіками часового ряду */}
           <ExperienceTimelineChart
             type="vacancy"
             bucket={bucket}
@@ -152,38 +158,38 @@ export default function DashboardPage() {
       </div>
 
       <div className="reveal reveal-4 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Card title="Топ навичок" description="Найбільш популярні навички у вакансіях">
+        <Card title={t('card.topSkills.title')} description={t('card.topSkills.desc')}>
           <TopSkillsChart type="vacancy" limit={10} height={340} />
         </Card>
 
-        <Card title="Топ міст" description="Географія активних вакансій">
+        <Card title={t('card.topCities.title')} description={t('card.topCities.desc')}>
           <LocationsChart type="vacancy" limit={10} height={340} />
         </Card>
       </div>
 
       <div className="reveal reveal-4 mt-6 grid grid-cols-1 gap-6">
-        <Card title="Джерела даних" description="Вакансії та резюме за джерелом збору (work.ua, DOU, remote-борди тощо)">
+        <Card title={t('card.sources.title')} description={t('card.sources.desc')}>
           <SourcesBreakdown height={320} />
         </Card>
       </div>
 
       <div className="reveal reveal-5 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <Card title="Досвід та зарплата" description="Кількість вакансій + середня ЗП по рівнях">
+        <Card title={t('card.expSalary.title')} description={t('card.expSalary.desc')}>
           <ExperienceChart type="vacancy" withSalary height={280} />
         </Card>
-        <Card title="Рівень англійської" description="Вимоги у вакансіях">
+        <Card title={t('card.english.title')} description={t('card.english.desc')}>
           <EnglishLevelDonut type="vacancy" height={280} />
         </Card>
-        <Card title="Топ роботодавців" description="Компанії з найбільшою кількістю вакансій">
+        <Card title={t('card.topEmployers.title')} description={t('card.topEmployers.desc')}>
           <TopCompaniesChart limit={10} height={280} />
         </Card>
       </div>
 
       <div className="reveal reveal-6 mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Card title="Досвід кандидатів" description="Рівні досвіду у резюме та середня очікувана ЗП">
+        <Card title={t('card.candExp.title')} description={t('card.candExp.desc')}>
           <ExperienceChart type="resume" withSalary height={280} />
         </Card>
-        <Card title="Топ навичок у резюме" description="Що знають кандидати">
+        <Card title={t('card.resumeSkills.title')} description={t('card.resumeSkills.desc')}>
           <TopSkillsChart type="resume" limit={10} height={340} />
         </Card>
       </div>

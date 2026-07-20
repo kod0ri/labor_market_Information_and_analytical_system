@@ -16,6 +16,10 @@ import {
   formatNumber,
 } from '../lib/format'
 
+// Єдина захищена сторінка застосунку (за ProtectedRoute) - зводить докупи
+// чотири незалежні адмін-ендпоінти (stats/pipeline/failures/system) у чотири
+// секції-компоненти нижче; кожна сама тримає свій isLoading/isError, тому
+// повільний один ендпоінт не блокує рендер решти панелі.
 function StatGrid({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{children}</div>
 }
@@ -83,7 +87,7 @@ function PipelineSection() {
   if (isLoading) return <Card title="Стан пайплайну"><Loading rows={4} /></Card>
   if (isError || !data) return <Card title="Стан пайплайну"><ErrorState /></Card>
 
-  const byType = Object.entries(data.failures.by_type)
+  const byType = Object.entries(data.failures.by_type)   // {тип_помилки: кількість} → пари для рендеру чіпів нижче
 
   return (
     <Card title="Стан пайплайну" description="Обробка даних через LLM">
@@ -134,6 +138,8 @@ function PipelineSection() {
 
 function FailuresSection() {
   const { data, isLoading, isError } = useFailures(50)
+  // useResolveFailure інвалідовує обидва запити (admin-failures, admin-pipeline)
+  // після успіху - список і зведена статистика оновлюються самі, без ручного refetch.
   const resolve = useResolveFailure()
 
   if (isLoading) return <Card title="Помилки пайплайну"><Loading rows={6} /></Card>
@@ -204,6 +210,10 @@ function FailuresSection() {
   )
 }
 
+// Пороги тривоги для смужок використання (диск/пам'ять/навантаження):
+// зелений до 60%, жовтий 60-85%, червоний від 85% - однакова шкала для
+// всіх метрик UsageBar/MetricTile нижче, щоб адмін зчитував "стан" з кольору
+// не читаючи число.
 function barColor(percent: number): string {
   if (percent >= 85) return 'var(--err)'
   if (percent >= 60) return 'var(--warn)'
@@ -211,7 +221,7 @@ function barColor(percent: number): string {
 }
 
 function UsageBar({ percent }: { percent: number }) {
-  const clamped = Math.max(0, Math.min(100, percent))
+  const clamped = Math.max(0, Math.min(100, percent))   // захист ширини смужки від значень поза [0, 100] (напр. load average > 100%)
   return (
     <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-[var(--card-border)]">
       <div
@@ -249,7 +259,7 @@ function SystemSection() {
   if (isError || !data) return <Card title="Сервер та користувачі"><ErrorState /></Card>
 
   const { visitors, users, server } = data
-  const { disk, memory, load_average: load } = server
+  const { disk, memory, load_average: load } = server   // memory/load можуть бути null (недоступні на деяких платформах) - перевіряються нижче
 
   return (
     <div className="space-y-6">
@@ -362,6 +372,9 @@ function SystemSection() {
                   }`
                 : 'недоступно'
             }
+            // Навантаження нормалізуємо на кількість ядер - load average "2.0"
+            // означає різне залежно від того, 2 ядра це чи 16, тож ділимо на
+            // cpu_count, щоб UsageBar показував порівнянний відсоток.
             percent={load && server.cpu_count ? (load['1m'] / server.cpu_count) * 100 : undefined}
           />
         </StatGrid>

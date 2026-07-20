@@ -27,11 +27,13 @@ export function LocationsChart({ type = 'vacancy', limit = 10, height = 340 }: P
   if (isError) return <ErrorState />
   if (!data || data.length === 0) return <EmptyState description="Поки немає даних географії" />
 
+  // Висота росте з кількістю рядків (28px на місто), а не фіксована - інакше
+  // при limit=20 стовпці горизонтального bar chart стиснулись би до нечитабельних смужок.
   return (
     <ResponsiveContainer width="100%" height={Math.max(height, data.length * 28 + 40)}>
       <BarChart data={data} layout="vertical" margin={{ top: 5, right: 24, left: 8, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-        <XAxis type="number" tickFormatter={(v) => formatNumber(v as number)} />
+        <XAxis type="number" allowDecimals={false} tickFormatter={(v) => formatNumber(v as number)} />
         <YAxis
           type="category"
           dataKey="city_name"
